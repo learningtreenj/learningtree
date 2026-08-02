@@ -25,31 +25,39 @@ function ChoiceSelect({ value, options, onChange }) {
   )
 }
 
-// Simplified per-eval-type status for the expandable Cases rows
-function evalTypeStatus(a, caseRow) {
+// Per-eval-type status. An evaluation is "Completed" only once its report is approved
+// (which creates a contractor_earnings row → its id is in completedSet).
+function evalTypeStatus(a, completedSet) {
   if (!a || a.contractor_id == null) return { label: 'Unassigned', cls: 's-unassigned' }
+  if (completedSet.has(a.id)) return { label: 'Completed', cls: 's-completed' }
   const s = (a.status || '').toLowerCase()
-  const caseDone = (caseRow?.Status || '').toLowerCase() === 'completed'
-  if (s === 'completed' || s === 'approved') return { label: 'Completed', cls: 's-completed' }
-  if (s === 'submitted') return caseDone
-    ? { label: 'Completed', cls: 's-completed' }
-    : { label: 'Pending Approval', cls: 's-drafting' }
+  if (s === 'submitted') return { label: 'Pending Approval', cls: 's-drafting' }
   return { label: 'Assigned', cls: 's-assigned' }   // Assigned / Contacted / Scheduled / Testing / Draft
 }
 
 // Build one expanded sub-row per requested eval type: matched assignment (evaluator + status) or Unassigned
-function buildEvalBreakdown(caseRow, asgs) {
+function buildEvalBreakdown(caseRow, asgs, completedSet) {
   const requested = (caseRow.evaluation_type || '').split(',').map(t => t.trim()).filter(Boolean)
   const rows = []
   const covered = new Set()
   for (const a of asgs) {
-    rows.push({ evalType: a.eval_type || '—', evaluator: a.Contractors?.name || null, status: evalTypeStatus(a, caseRow) })
+    rows.push({ evalType: a.eval_type || '—', evaluator: a.Contractors?.name || null, status: evalTypeStatus(a, completedSet) })
     if (a.eval_type) covered.add(a.eval_type.toLowerCase())
   }
   for (const t of requested) {
     if (!covered.has(t.toLowerCase())) rows.push({ evalType: t, evaluator: null, status: { label: 'Unassigned', cls: 's-unassigned' } })
   }
   return rows
+}
+
+// A case is truly complete only when every requested eval type is assigned AND every
+// assignment's evaluation is approved/completed.
+function caseFullyComplete(caseRow, asgs, completedSet) {
+  if (!asgs.length) return false
+  const requested = (caseRow.evaluation_type || '').split(',').map(t => t.trim()).filter(Boolean)
+  const covered = new Set(asgs.map(a => (a.eval_type || '').toLowerCase()))
+  const allAssigned = requested.every(t => covered.has(t.toLowerCase()))
+  return allAssigned && asgs.every(a => completedSet.has(a.id))
 }
 
 // Shows whether the contractor has accepted/declined an assignment
@@ -128,7 +136,7 @@ export default function AdminPortal({ user }) {
       {screen === 'dashboard' && <Dashboard assignments={assignments} openAssignments={openAssignments} dueThisWeek={dueThisWeek} loading={loading}
         onOpenCase={c => { setSelectedCase(c); setScreen('casedetail') }} cases={cases} />}
       {screen === 'referral' && <NewReferral onCreated={c => { load(); setSelectedCase(c); setScreen('casedetail') }} />}
-      {screen === 'cases' && <CaseList cases={cases} assignments={assignments} loading={loading}
+      {screen === 'cases' && <CaseList cases={cases} assignments={assignments} earnings={earnings} loading={loading}
         onOpen={c => { setSelectedCase(c); setScreen('casedetail') }} />}
       {screen === 'casedetail' && selectedCase && <CaseDetail caseRow={selectedCase} assignments={assignments.filter(a => a.case_id === selectedCase.id)}
         allAssignments={assignments} contractors={contractors} onBack={() => setScreen('cases')} onChanged={load} />}
@@ -436,7 +444,7 @@ function NewReferral({ onCreated }) {
   )
 }
 
-function CaseList({ cases, assignments, loading, onOpen }) {
+function CaseList({ cases, assignments, earnings = [], loading, onOpen }) {
   const [q, setQ] = useState('')
   const [chip, setChip] = useState('active')
   const [expanded, setExpanded] = useState({})
@@ -446,6 +454,8 @@ function CaseList({ cases, assignments, loading, onOpen }) {
     for (const a of assignments) { m[a.case_id] = m[a.case_id] || []; m[a.case_id].push(a) }
     return m
   }, [assignments])
+  // Assignment ids whose evaluation has been approved/completed (an earning was created)
+  const completedSet = useMemo(() => new Set(earnings.map(e => e.assignment_id)), [earnings])
 
   const rows = cases.filter(c => {
     const asg = byCase[c.id] || []
@@ -485,8 +495,10 @@ function CaseList({ cases, assignments, loading, onOpen }) {
             {!loading && rows.length === 0 && <tr><td colSpan={7} style={{ color: '#888' }}>No cases match.</td></tr>}
             {rows.slice(0, 200).map(c => {
               const asg = byCase[c.id] || []
-              const breakdown = expanded[c.id] ? buildEvalBreakdown(c, asg) : null
+              const breakdown = expanded[c.id] ? buildEvalBreakdown(c, asg, completedSet) : null
               const canExpand = asg.length > 0 || (c.evaluation_type || '').trim().length > 0
+              const complete = caseFullyComplete(c, asg, completedSet)
+              const prematureComplete = !complete && (c.Status || '').toLowerCase() === 'completed'
               return (
                 <Fragment key={c.id}>
                   <tr>
@@ -503,27 +515,25 @@ function CaseList({ cases, assignments, loading, onOpen }) {
                             {asg.length === 0 ? 'Unassigned' : `${asg.filter(a => (a.status || '').toLowerCase() === 'submitted').length}/${asg.length} submitted`}
                           </span>}
                     </td>
-                    <td><Badge status={c.Status} /></td>
+                    <td>
+                      {complete
+                        ? <Badge status="Completed" />
+                        : prematureComplete
+                          ? <span className="badge-s s-drafting">In Progress</span>
+                          : <Badge status={c.Status} />}
+                    </td>
                   </tr>
-                  {expanded[c.id] && (
-                    <tr>
-                      <td colSpan={7} style={{ background: '#f8fafc', padding: '4px 12px 10px 40px' }}>
-                        <table style={{ width: 'auto', minWidth: 460 }}>
-                          <thead><tr><th>Evaluation Type</th><th>Evaluator</th><th>Status</th></tr></thead>
-                          <tbody>
-                            {breakdown.length === 0 && <tr><td colSpan={3} style={{ color: '#888' }}>No evaluation types listed.</td></tr>}
-                            {breakdown.map((r, i) => (
-                              <tr key={i}>
-                                <td style={{ fontWeight: 600 }}>{r.evalType}</td>
-                                <td>{r.evaluator || <span style={{ color: '#888' }}>— not assigned —</span>}</td>
-                                <td><span className={`badge-s ${r.status.cls}`}>{r.status.label}</span></td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </td>
+                  {expanded[c.id] && breakdown.map((r, i) => (
+                    <tr key={`${c.id}-e-${i}`} style={{ background: '#f8fafc' }}>
+                      <td></td>
+                      <td></td>
+                      <td></td>
+                      <td style={{ paddingLeft: 24, fontWeight: 600 }}>↳ {r.evalType}</td>
+                      <td></td>
+                      <td>{r.evaluator || <span style={{ color: '#888' }}>— not assigned —</span>}</td>
+                      <td><span className={`badge-s ${r.status.cls}`}>{r.status.label}</span></td>
                     </tr>
-                  )}
+                  ))}
                 </Fragment>
               )
             })}
