@@ -4,6 +4,7 @@ import { Shell, Badge, StatCard, Meta } from './ui.jsx'
 import { generateInvoiceDoc, RATE_PER_EVAL } from './invoice.js'
 import { scoreContractors } from './smartAssign.js'
 import { extractTextFromFile } from './extractDocumentText.js'
+import { exportCasesToExcel } from './exportExcel.js'
 
 const EVAL_TYPES = ['Speech', 'Educational', 'Psych', 'Social', 'OT', 'PT']
 
@@ -360,6 +361,11 @@ function CaseList({ cases, assignments, loading, onOpen }) {
           {[['active', 'Active'], ['due', 'Due Soon'], ['completed', 'Completed'], ['all', 'All']].map(([id, label]) => (
             <span key={id} className={`filter-chip ${chip === id ? 'active' : ''}`} onClick={() => setChip(id)}>{label}</span>
           ))}
+          <button className="btn btn-secondary btn-sm" title="Download all cases and assignments as an Excel workbook"
+            disabled={cases.length === 0}
+            onClick={() => exportCasesToExcel(cases, assignments)}>
+            ⬇ Export to Excel
+          </button>
         </div>
       </div>
       <div className="tbl-wrap">
