@@ -7,6 +7,8 @@ import { extractTextFromFile } from './extractDocumentText.js'
 import { exportCasesToExcel } from './exportExcel.js'
 
 const EVAL_TYPES = ['Speech', 'Educational', 'Psych', 'Social', 'OT', 'PT']
+const CASE_STATUSES = ['Unassigned', 'Assigned', 'In Progress', 'Pending Approval', 'Completed']
+const GRADES = ['Pre-K', 'K', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12']
 
 export default function AdminPortal({ user }) {
   const [screen, setScreen] = useState('dashboard')
@@ -414,11 +416,66 @@ function CaseList({ cases, assignments, loading, onOpen }) {
   )
 }
 
-function CaseDetail({ caseRow: c, assignments, allAssignments, contractors, onBack, onChanged }) {
+function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack, onChanged }) {
+  // Local mirror of the case so edits show immediately (the parent's selectedCase
+  // isn't refreshed by load()). Resyncs whenever a different case is opened.
+  const [c, setC] = useState(caseRow)
+  useEffect(() => { setC(caseRow); setEditing(false); setConfirmDelete(false) }, [caseRow])
+
   const [msg, setMsg] = useState(null)
-  const [newAsg, setNewAsg] = useState({ contractor_id: '', eval_type: '', report_due_date: c.Report_Due_date || '' })
+  const [newAsg, setNewAsg] = useState({ contractor_id: '', eval_type: '', report_due_date: caseRow.Report_Due_date || '' })
   const [contractorQuery, setContractorQuery] = useState('')
   const [busy, setBusy] = useState(false)
+  const [editing, setEditing] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [form, setForm] = useState({})
+  const setF = (k, v) => setForm(prev => ({ ...prev, [k]: v }))
+
+  function startEdit() {
+    setForm({
+      Student_name: c.Student_name || '', student_dob: c.student_dob || '', grade: c['grade level'] || '',
+      Language: c.Language || '', School_district: c.School_district || '', County: c.County || '',
+      district_contact: c.district_contact || '', case_manager_name: c.case_manager_name || '', case_manager_email: c.case_manager_email || '',
+      parents_name: c.parents_name || '', parents_phone: c.parents_phone != null ? String(c.parents_phone) : '', parents_email: c.parents_email || '',
+      home_address: c.home_address || '', evaluation_type: c.evaluation_type || '', testing_materials: c.testing_materials || '',
+      reason_for_referral: c.reason_for_referral || '', Report_Due_date: c.Report_Due_date || '', referral_source: c.referral_source || '',
+      Status: c.Status || '',
+    })
+    setMsg(null); setConfirmDelete(false); setEditing(true)
+  }
+
+  async function saveEdit() {
+    if (!form.Student_name || !form.School_district) { setMsg({ kind: 'warn', text: 'Student name and district are required.' }); return }
+    setBusy(true); setMsg(null)
+    const phone = (form.parents_phone || '').replace(/\D/g, '')
+    const patch = {
+      Student_name: form.Student_name || null, student_dob: form.student_dob || null, 'grade level': form.grade || null,
+      Language: form.Language || null, School_district: form.School_district || null, County: form.County || null,
+      district_contact: form.district_contact || null, case_manager_name: form.case_manager_name || null, case_manager_email: form.case_manager_email || null,
+      parents_name: form.parents_name || null, parents_phone: phone ? Number(phone) : null, parents_email: form.parents_email || null,
+      home_address: form.home_address || null, evaluation_type: form.evaluation_type || null, testing_materials: form.testing_materials || null,
+      reason_for_referral: form.reason_for_referral || null, Report_Due_date: form.Report_Due_date || null, referral_source: form.referral_source || null,
+      Status: form.Status || null,
+    }
+    const { error } = await supabase.from('Cases').update(patch).eq('id', c.id)
+    if (error) setMsg({ kind: 'danger', text: error.message })
+    else {
+      setC(prev => ({ ...prev, ...patch }))   // reflect edits immediately
+      setEditing(false)
+      setMsg({ kind: 'success', text: 'Case updated.' })
+      onChanged()
+    }
+    setBusy(false)
+  }
+
+  async function deleteCase() {
+    setBusy(true); setMsg(null)
+    const { error } = await supabase.rpc('admin_delete_case', { p_case_id: c.id })
+    setBusy(false)
+    if (error) { setMsg({ kind: 'danger', text: error.message }); setConfirmDelete(false); return }
+    onChanged()
+    onBack()   // case is gone — return to the list
+  }
 
   const filteredContractors = contractors.filter(k =>
     `${k.name || ''} ${k.field || ''} ${k.language || ''} ${k.language_2 || ''} ${k.county || ''}`.toLowerCase().includes(contractorQuery.toLowerCase()))
@@ -468,23 +525,92 @@ function CaseDetail({ caseRow: c, assignments, allAssignments, contractors, onBa
       </div>
       {msg && <div className={`alert alert-${msg.kind}`}>{msg.text}</div>}
 
-      <div className="card" style={{ marginBottom: 14 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
-          <h2 style={{ fontSize: 17, fontWeight: 800 }}>Case {c.case_number || c.id} — {c.Student_name || 'Student'}</h2>
-          <Badge status={c.Status} />
+      {confirmDelete && (
+        <div className="alert alert-danger" style={{ flexDirection: 'column', gap: 8 }}>
+          <div><strong>⚠️ Delete case {c.case_number || c.id}?</strong> This permanently removes the case and its {assignments.length} assignment{assignments.length === 1 ? '' : 's'} (plus any reviews, earnings, and invoices for it). This cannot be undone.</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn btn-danger btn-sm" disabled={busy} onClick={deleteCase}>Yes, delete permanently</button>
+            <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setConfirmDelete(false)}>Cancel</button>
+          </div>
         </div>
-        <div className="meta-grid" style={{ marginTop: 14 }}>
-          <Meta k="District" v={c.School_district} />
-          <Meta k="County" v={c.County} />
-          <Meta k="Report Due" v={fmtDate(c.Report_Due_date)} style={dueColor(c.Report_Due_date)} />
-          <Meta k="Language" v={c.Language} />
-          <Meta k="Grade" v={c['grade level']} />
-          <Meta k="DOB" v={c.student_dob ? fmtDate(c.student_dob) : null} />
-          <Meta k="Eval Types Requested" v={c.evaluation_type} />
-          <Meta k="Case Manager" v={c.case_manager_name} />
-          <Meta k="Referral Source" v={c.referral_source} />
+      )}
+
+      {editing ? (
+        <div className="card" style={{ marginBottom: 14, border: '2px solid var(--accent)' }}>
+          <div className="sec-head">
+            <h3>✏️ Editing Case {c.case_number || c.id}</h3>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="btn btn-primary btn-sm" disabled={busy} onClick={saveEdit}>💾 Save Changes</button>
+              <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => { setEditing(false); setMsg(null) }}>Cancel</button>
+            </div>
+          </div>
+          <div className="form-row">
+            <div className="form-group"><label>Student Name *</label><input value={form.Student_name} onChange={e => setF('Student_name', e.target.value)} /></div>
+            <div className="form-group"><label>Status</label>
+              <select value={form.Status} onChange={e => setF('Status', e.target.value)}>
+                {!CASE_STATUSES.includes(form.Status) && form.Status && <option value={form.Status}>{form.Status}</option>}
+                {CASE_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="form-row-3">
+            <div className="form-group"><label>Date of Birth</label><input type="date" value={form.student_dob} onChange={e => setF('student_dob', e.target.value)} /></div>
+            <div className="form-group"><label>Grade</label>
+              <select value={form.grade} onChange={e => setF('grade', e.target.value)}>
+                <option value="">Select…</option>
+                {GRADES.map(g => <option key={g} value={g}>{g}</option>)}
+              </select>
+            </div>
+            <div className="form-group"><label>Language(s)</label><input value={form.Language} onChange={e => setF('Language', e.target.value)} /></div>
+          </div>
+          <div className="form-row">
+            <div className="form-group"><label>District *</label><input value={form.School_district} onChange={e => setF('School_district', e.target.value)} /></div>
+            <div className="form-group"><label>County</label><input value={form.County} onChange={e => setF('County', e.target.value)} /></div>
+          </div>
+          <div className="form-row-3">
+            <div className="form-group"><label>District Contact</label><input value={form.district_contact} onChange={e => setF('district_contact', e.target.value)} /></div>
+            <div className="form-group"><label>Case Manager</label><input value={form.case_manager_name} onChange={e => setF('case_manager_name', e.target.value)} /></div>
+            <div className="form-group"><label>Case Manager Email</label><input value={form.case_manager_email} onChange={e => setF('case_manager_email', e.target.value)} /></div>
+          </div>
+          <div className="form-row">
+            <div className="form-group"><label>Parent / Guardian</label><input value={form.parents_name} onChange={e => setF('parents_name', e.target.value)} /></div>
+            <div className="form-group"><label>Parent Phone</label><input value={form.parents_phone} onChange={e => setF('parents_phone', e.target.value)} /></div>
+          </div>
+          <div className="form-row">
+            <div className="form-group"><label>Parent Email</label><input value={form.parents_email} onChange={e => setF('parents_email', e.target.value)} /></div>
+            <div className="form-group"><label>Home Address</label><input value={form.home_address} onChange={e => setF('home_address', e.target.value)} /></div>
+          </div>
+          <div className="form-row">
+            <div className="form-group"><label>Evaluation Type(s)</label><input value={form.evaluation_type} onChange={e => setF('evaluation_type', e.target.value)} placeholder="e.g. Speech, Psych" /></div>
+            <div className="form-group"><label>Report Due Date</label><input type="date" value={form.Report_Due_date} onChange={e => setF('Report_Due_date', e.target.value)} /></div>
+          </div>
+          <div className="form-group"><label>Testing Materials</label><textarea rows={2} value={form.testing_materials} onChange={e => setF('testing_materials', e.target.value)} /></div>
+          <div className="form-group"><label>Reason for Referral</label><textarea rows={2} value={form.reason_for_referral} onChange={e => setF('reason_for_referral', e.target.value)} /></div>
+          <div className="form-group"><label>Referral Source</label><input value={form.referral_source} onChange={e => setF('referral_source', e.target.value)} /></div>
         </div>
-      </div>
+      ) : (
+        <div className="card" style={{ marginBottom: 14 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, alignItems: 'flex-start' }}>
+            <h2 style={{ fontSize: 17, fontWeight: 800 }}>Case {c.case_number || c.id} — {c.Student_name || 'Student'}</h2>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <Badge status={c.Status} />
+              <button className="btn btn-secondary btn-sm" onClick={startEdit}>✏️ Edit</button>
+              <button className="btn btn-danger-outline btn-sm" onClick={() => { setConfirmDelete(true); setMsg(null) }}>🗑 Delete</button>
+            </div>
+          </div>
+          <div className="meta-grid" style={{ marginTop: 14 }}>
+            <Meta k="District" v={c.School_district} />
+            <Meta k="County" v={c.County} />
+            <Meta k="Report Due" v={fmtDate(c.Report_Due_date)} style={dueColor(c.Report_Due_date)} />
+            <Meta k="Language" v={c.Language} />
+            <Meta k="Grade" v={c['grade level']} />
+            <Meta k="DOB" v={c.student_dob ? fmtDate(c.student_dob) : null} />
+            <Meta k="Eval Types Requested" v={c.evaluation_type} />
+            <Meta k="Case Manager" v={c.case_manager_name} />
+            <Meta k="Referral Source" v={c.referral_source} />
+          </div>
+        </div>
+      )}
 
       <div className="grid-2" style={{ alignItems: 'start' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -510,21 +636,25 @@ function CaseDetail({ caseRow: c, assignments, allAssignments, contractors, onBa
             </div>
           </div>
 
-          <div className="card">
-            <div className="card-title">👪 Parent / Guardian</div>
-            <div className="meta-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
-              <Meta k="Name" v={c.parents_name} />
-              <Meta k="Phone" v={c.parents_phone ? String(c.parents_phone) : null} />
-              <Meta k="Email" v={c.parents_email} />
-              <Meta k="Address" v={c.home_address} />
+          {!editing && (
+            <div className="card">
+              <div className="card-title">👪 Parent / Guardian</div>
+              <div className="meta-grid" style={{ gridTemplateColumns: '1fr 1fr' }}>
+                <Meta k="Name" v={c.parents_name} />
+                <Meta k="Phone" v={c.parents_phone ? String(c.parents_phone) : null} />
+                <Meta k="Email" v={c.parents_email} />
+                <Meta k="Address" v={c.home_address} />
+              </div>
             </div>
-          </div>
+          )}
 
-          <div className="card">
-            <div className="card-title">🧪 Testing Materials / Referral Reason</div>
-            <div style={{ fontSize: 13, whiteSpace: 'pre-wrap' }}>{c.testing_materials || '—'}</div>
-            {c.reason_for_referral && <div style={{ fontSize: 13, whiteSpace: 'pre-wrap', marginTop: 8, color: '#555' }}>{c.reason_for_referral}</div>}
-          </div>
+          {!editing && (
+            <div className="card">
+              <div className="card-title">🧪 Testing Materials / Referral Reason</div>
+              <div style={{ fontSize: 13, whiteSpace: 'pre-wrap' }}>{c.testing_materials || '—'}</div>
+              {c.reason_for_referral && <div style={{ fontSize: 13, whiteSpace: 'pre-wrap', marginTop: 8, color: '#555' }}>{c.reason_for_referral}</div>}
+            </div>
+          )}
         </div>
 
         <div className="card" style={{ border: '2px solid var(--accent)' }}>

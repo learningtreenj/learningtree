@@ -103,6 +103,10 @@ tbody tr:last-child td { border-bottom: none; }
 .btn-secondary:hover { background: var(--accent-light); }
 .btn-ghost { background: #fff; color: #555; border-color: var(--border); }
 .btn-ghost:hover { background: #f4f5f6; }
+.btn-danger { background: var(--red); color: #fff; border-color: var(--red); }
+.btn-danger:hover { background: #a5281b; }
+.btn-danger-outline { background: #fff; color: var(--red); border-color: var(--red); }
+.btn-danger-outline:hover { background: var(--red-bg); }
 .btn-sm { padding: 4px 10px; font-size: 12px; }
 .btn-block { width: 100%; justify-content: center; padding: 9px; font-size: 14px; }
 
