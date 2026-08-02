@@ -560,6 +560,9 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
   const [busy, setBusy] = useState(false)
   const [editing, setEditing] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [editAsgId, setEditAsgId] = useState(null)   // assignment being reassigned
+  const [reassignTo, setReassignTo] = useState('')
+  const [confirmRemoveId, setConfirmRemoveId] = useState(null)
   const [form, setForm] = useState({})
   const [evalTypes, setEvalTypes] = useState([])   // checked standard types
   const [extraEvals, setExtraEvals] = useState([]) // non-standard tokens, preserved as-is
@@ -673,6 +676,37 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
     if (!c.referral_file_path) return
     const { data, error } = await supabase.storage.from('referrals').createSignedUrl(c.referral_file_path, 300)
     if (!error && data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
+
+  function startReassign(a) {
+    setEditAsgId(a.id); setReassignTo(String(a.contractor_id ?? '')); setConfirmRemoveId(null); setMsg(null)
+  }
+
+  async function saveReassign(a) {
+    if (!reassignTo) { setMsg({ kind: 'warn', text: 'Pick a contractor to reassign to.' }); return }
+    if (String(reassignTo) === String(a.contractor_id)) { setEditAsgId(null); return }
+    setBusy(true); setMsg(null)
+    const { error } = await supabase.from('Assignments').update({
+      contractor_id: Number(reassignTo),
+      acceptance_status: 'pending', accepted_at: null, declined_at: null, decline_reason: null,
+      status: 'Assigned',
+    }).eq('id', a.id)
+    if (error) { setMsg({ kind: 'danger', text: error.message }); setBusy(false); return }
+    // Notify the newly-assigned contractor (non-blocking)
+    let text = 'Assignment reassigned.'
+    try {
+      const { data: em } = await supabase.functions.invoke('notify-assignment', { body: { assignment_id: a.id } })
+      if (em?.success && em.sent_to) text = `Reassigned — notification emailed to ${em.sent_to}.`
+      else if (em?.skipped_no_email) text = 'Reassigned. New contractor has no email on file, so no notice was sent.'
+    } catch { /* email is best-effort */ }
+    setEditAsgId(null); setMsg({ kind: 'success', text }); onChanged(); setBusy(false)
+  }
+
+  async function removeAssignment(a) {
+    setBusy(true); setMsg(null)
+    const { error } = await supabase.rpc('admin_delete_assignment', { p_assignment_id: a.id })
+    if (error) { setMsg({ kind: 'danger', text: error.message }); setBusy(false); return }
+    setConfirmRemoveId(null); setMsg({ kind: 'success', text: 'Assignment removed from this case.' }); onChanged(); setBusy(false)
   }
 
   async function uploadReferral(file) {
@@ -812,27 +846,64 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
             <div className="card-title">Assignments on this Case</div>
             <div className="tbl-wrap">
               <table>
-                <thead><tr><th>Contractor</th><th>Eval Type</th><th>Accepted?</th><th>Due</th><th>Testing</th><th>Status</th><th>Report</th></tr></thead>
+                <thead><tr><th>Contractor</th><th>Eval Type</th><th>Accepted?</th><th>Due</th><th>Testing</th><th>Status</th><th>Report</th><th></th></tr></thead>
                 <tbody>
-                  {assignments.length === 0 && <tr><td colSpan={7} style={{ color: '#888' }}>No contractors assigned yet.</td></tr>}
+                  {assignments.length === 0 && <tr><td colSpan={8} style={{ color: '#888' }}>No contractors assigned yet.</td></tr>}
                   {assignments.map(a => (
-                    <tr key={a.id}>
-                      <td>{a.Contractors?.name || '—'}</td>
-                      <td>{a.eval_type || '—'}</td>
-                      <td><AcceptBadge status={a.acceptance_status} /></td>
-                      <td style={dueColor(a.report_due_date)}>{fmtDate(a.report_due_date)}</td>
-                      <td>{a.testing_date ? fmtDate(a.testing_date) : '—'}</td>
-                      <td><Badge status={a.status} /></td>
-                      <td>{(() => {
-                        const files = Array.isArray(a.report_files) && a.report_files.length
-                          ? a.report_files
-                          : (a.report_url ? [{ path: a.report_url, name: a.report_url.split('/').pop() }] : [])
-                        if (!files.length) return '—'
-                        return files.map((f, i) => (
-                          <div key={f.path || i}><span className="tbl-link" onClick={() => viewReport(f.path)}>📄 {files.length > 1 ? (f.name || f.path.split('/').pop()) : 'View'}</span></div>
-                        ))
-                      })()}</td>
-                    </tr>
+                    <Fragment key={a.id}>
+                      <tr>
+                        <td>{a.Contractors?.name || '—'}</td>
+                        <td>{a.eval_type || '—'}</td>
+                        <td><AcceptBadge status={a.acceptance_status} /></td>
+                        <td style={dueColor(a.report_due_date)}>{fmtDate(a.report_due_date)}</td>
+                        <td>{a.testing_date ? fmtDate(a.testing_date) : '—'}</td>
+                        <td><Badge status={a.status} /></td>
+                        <td>{(() => {
+                          const files = Array.isArray(a.report_files) && a.report_files.length
+                            ? a.report_files
+                            : (a.report_url ? [{ path: a.report_url, name: a.report_url.split('/').pop() }] : [])
+                          if (!files.length) return '—'
+                          return files.map((f, i) => (
+                            <div key={f.path || i}><span className="tbl-link" onClick={() => viewReport(f.path)}>📄 {files.length > 1 ? (f.name || f.path.split('/').pop()) : 'View'}</span></div>
+                          ))
+                        })()}</td>
+                        <td style={{ whiteSpace: 'nowrap' }}>
+                          <button className="btn btn-ghost btn-sm" title="Reassign to a different contractor" disabled={busy} onClick={() => startReassign(a)}>✏️</button>{' '}
+                          <button className="btn btn-danger-outline btn-sm" title="Remove this assignment" disabled={busy} onClick={() => { setConfirmRemoveId(a.id); setEditAsgId(null); setMsg(null) }}>🗑</button>
+                        </td>
+                      </tr>
+                      {editAsgId === a.id && (
+                        <tr>
+                          <td colSpan={8} style={{ background: 'var(--accent-light)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                              <strong style={{ fontSize: 13 }}>Reassign {a.eval_type || 'evaluation'} to:</strong>
+                              <select value={reassignTo} onChange={e => setReassignTo(e.target.value)} style={{ padding: '6px 10px', minWidth: 240 }}>
+                                <option value="">Select contractor…</option>
+                                {contractors.map(k => (
+                                  <option key={k.identifier} value={k.identifier}>
+                                    {k.name}{[k.field, [k.language, k.language_2].filter(Boolean).join('/')].filter(Boolean).length ? ` — ${[k.field, [k.language, k.language_2].filter(Boolean).join('/')].filter(Boolean).join(' · ')}` : ''}
+                                  </option>
+                                ))}
+                              </select>
+                              <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => saveReassign(a)}>Save & notify</button>
+                              <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setEditAsgId(null)}>Cancel</button>
+                              <span style={{ fontSize: 12, color: 'var(--muted)' }}>Resets acceptance to “Awaiting” and emails the new contractor.</span>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                      {confirmRemoveId === a.id && (
+                        <tr>
+                          <td colSpan={8} style={{ background: 'var(--red-bg)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                              <span style={{ fontSize: 13, color: 'var(--red)' }}>Remove <strong>{a.eval_type || 'this evaluation'}</strong>{a.Contractors?.name ? ` — ${a.Contractors.name}` : ''} from this case? This deletes just this assignment (and its review/earning), not the case.</span>
+                              <button className="btn btn-danger btn-sm" disabled={busy} onClick={() => removeAssignment(a)}>Yes, remove</button>
+                              <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setConfirmRemoveId(null)}>Cancel</button>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
@@ -1316,6 +1387,12 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
   const [form, setForm] = useState(null)
   const [msg, setMsg] = useState(null)
   const [busy, setBusy] = useState(false)
+  const [expanded, setExpanded] = useState({})
+  const toggle = id => setExpanded(p => ({ ...p, [id]: !p[id] }))
+  const qaBadge = (a) => {
+    const s = qaByAssignment.get(a.id)?.qa_status
+    return <Badge status={s === 'approved' ? 'Approved' : s === 'needs_revision' ? 'Revision' : 'Pending'} />
+  }
 
   const submitted = assignments.filter(a => a.submitted_at)
   const rows = submitted
@@ -1329,6 +1406,18 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
     })
 
   const selected = submitted.find(a => a.id === selectedId) || null
+
+  // Group the (already sorted) submitted reports by case, preserving order
+  const caseGroups = useMemo(() => {
+    const out = []
+    const idx = new Map()
+    for (const a of rows) {
+      let g = idx.get(a.case_id)
+      if (!g) { g = { case_id: a.case_id, caseRow: a.Cases, items: [] }; idx.set(a.case_id, g); out.push(g) }
+      g.items.push(a)
+    }
+    return out
+  }, [rows])
 
   function openReview(a) {
     const qa = qaByAssignment.get(a.id)
@@ -1436,19 +1525,42 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
           <div className="card-title">Submitted Reports ({rows.length})</div>
           <div className="tbl-wrap">
             <table>
-              <thead><tr><th>Case</th><th>Contractor</th><th>Eval</th><th>Submitted</th><th>QA Status</th></tr></thead>
+              <thead><tr><th>Case</th><th>Student</th><th>Evaluation</th><th>Submitted</th><th>QA Status</th></tr></thead>
               <tbody>
                 {rows.length === 0 && <tr><td colSpan={5} style={{ color: '#888' }}>Nothing awaiting review.</td></tr>}
-                {rows.map(a => {
-                  const qa = qaByAssignment.get(a.id)
+                {caseGroups.map(g => {
+                  if (g.items.length === 1) {
+                    const a = g.items[0]
+                    return (
+                      <tr key={a.id} onClick={() => openReview(a)} style={{ cursor: 'pointer', background: selectedId === a.id ? 'var(--accent-light)' : undefined }}>
+                        <td><span className="tbl-link">{a.Cases?.case_number || a.case_id}</span></td>
+                        <td>{a.Cases?.Student_name || '—'}</td>
+                        <td>{a.eval_type || '—'} — {a.Contractors?.name || '—'}</td>
+                        <td>{fmtDate((a.submitted_at || '').slice(0, 10))}</td>
+                        <td>{qaBadge(a)}</td>
+                      </tr>
+                    )
+                  }
+                  const approved = g.items.filter(x => qaByAssignment.get(x.id)?.qa_status === 'approved').length
                   return (
-                    <tr key={a.id} style={{ background: selectedId === a.id ? 'var(--accent-light)' : undefined }}>
-                      <td><span className="tbl-link" onClick={() => openReview(a)}>{a.Cases?.case_number || a.case_id}</span></td>
-                      <td>{a.Contractors?.name || '—'}</td>
-                      <td>{a.eval_type || '—'}</td>
-                      <td>{fmtDate((a.submitted_at || '').slice(0, 10))}</td>
-                      <td><Badge status={qa?.qa_status === 'approved' ? 'Approved' : qa?.qa_status === 'needs_revision' ? 'Revision' : 'Pending'} /></td>
-                    </tr>
+                    <Fragment key={g.case_id}>
+                      <tr style={{ cursor: 'pointer' }} onClick={() => toggle(g.case_id)}>
+                        <td><span className="tbl-link">{g.caseRow?.case_number || g.case_id}</span></td>
+                        <td>{g.caseRow?.Student_name || '—'}</td>
+                        <td><span style={{ display: 'inline-block', width: 12 }}>{expanded[g.case_id] ? '▾' : '▸'}</span>{g.items.length} evaluations</td>
+                        <td>—</td>
+                        <td><span className={`badge-s ${approved === g.items.length ? 's-completed' : 's-pending'}`}>{approved}/{g.items.length} approved</span></td>
+                      </tr>
+                      {expanded[g.case_id] && g.items.map(a => (
+                        <tr key={a.id} onClick={() => openReview(a)} style={{ cursor: 'pointer', background: selectedId === a.id ? 'var(--accent-light)' : '#f8fafc' }}>
+                          <td></td>
+                          <td></td>
+                          <td style={{ paddingLeft: 24 }}>↳ {a.eval_type || '—'} — {a.Contractors?.name || '—'}</td>
+                          <td>{fmtDate((a.submitted_at || '').slice(0, 10))}</td>
+                          <td>{qaBadge(a)}</td>
+                        </tr>
+                      ))}
+                    </Fragment>
                   )
                 })}
               </tbody>
