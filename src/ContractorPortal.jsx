@@ -216,6 +216,12 @@ function AssignmentDetail({ assignment, contractor, onBack }) {
     if (!error && data?.signedUrl) window.open(data.signedUrl, '_blank')
   }
 
+  async function viewReferral() {
+    if (!c.referral_file_path) return
+    const { data, error } = await supabase.storage.from('referrals').createSignedUrl(c.referral_file_path, 300)
+    if (!error && data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
+
   const stepIndex = Math.max(0, STATUSES.findIndex(s => s.toLowerCase() === (status || '').toLowerCase()))
 
   return (
@@ -282,6 +288,11 @@ function AssignmentDetail({ assignment, contractor, onBack }) {
               <Meta k="Report Due" v={fmtDate(a.report_due_date)} style={dueColor(a.report_due_date)} />
               <Meta k="Case Manager" v={c.case_manager_name} />
             </div>
+            {c.referral_file_path && (
+              <div className="alert alert-info" style={{ marginTop: 12, marginBottom: 0 }}>
+                📎 <span>Original referral form: <span className="tbl-link" onClick={viewReferral}>{c.referral_file_name || 'View'}</span> — open it to verify the case details.</span>
+              </div>
+            )}
           </div>
 
           <div className="card">

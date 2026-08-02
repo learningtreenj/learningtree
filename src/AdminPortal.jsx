@@ -177,6 +177,7 @@ function NewReferral({ onCreated }) {
   const [msg, setMsg] = useState(null)
   const [parsing, setParsing] = useState(false)
   const [parsedFrom, setParsedFrom] = useState(null)
+  const [referralFile, setReferralFile] = useState(null)  // original uploaded form, stored on create
   const [dragActive, setDragActive] = useState(false)
   const [busy, setBusy] = useState(false)
   const set = (k, v) => setF(prev => ({ ...prev, [k]: v }))
@@ -211,8 +212,19 @@ function NewReferral({ onCreated }) {
       created_date: new Date().toISOString().slice(0, 10),
     }
     const { data, error } = await supabase.from('Cases').insert(row).select().single()
-    if (error) setMsg({ kind: 'danger', text: error.message })
-    else onCreated(data)
+    if (error) { setMsg({ kind: 'danger', text: error.message }); setBusy(false); return }
+
+    // Store the original referral form so admins and contractors can proofread it.
+    // Non-blocking: if the upload fails, the case is still created.
+    if (referralFile) {
+      const path = `${data.id}/${referralFile.name}`
+      const { error: upErr } = await supabase.storage.from('referrals').upload(path, referralFile, { upsert: true })
+      if (!upErr) {
+        await supabase.from('Cases').update({ referral_file_path: path, referral_file_name: referralFile.name }).eq('id', data.id)
+        data.referral_file_path = path; data.referral_file_name = referralFile.name
+      }
+    }
+    onCreated(data)
     setBusy(false)
   }
 
@@ -230,6 +242,7 @@ function NewReferral({ onCreated }) {
 
   async function parseDocument(file) {
     if (!file) return
+    setReferralFile(file)   // keep the original so it can be stored on the case for proofreading
     setParsing(true); setMsg(null); setParsedFrom(null)
     const ext = file.name.split('.').pop()?.toLowerCase()
     let text = ''
@@ -584,6 +597,12 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
     if (!error && data?.signedUrl) window.open(data.signedUrl, '_blank')
   }
 
+  async function viewReferral() {
+    if (!c.referral_file_path) return
+    const { data, error } = await supabase.storage.from('referrals').createSignedUrl(c.referral_file_path, 300)
+    if (!error && data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
+
   return (
     <>
       <div style={{ marginBottom: 10 }}>
@@ -687,6 +706,11 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
             <Meta k="Case Manager" v={c.case_manager_name} />
             <Meta k="Referral Source" v={c.referral_source} />
           </div>
+          {c.referral_file_path && (
+            <div className="alert alert-info" style={{ marginTop: 14, marginBottom: 0 }}>
+              📎 <span>Original referral form: <span className="tbl-link" onClick={viewReferral}>{c.referral_file_name || 'View'}</span> — open it to proofread the details above.</span>
+            </div>
+          )}
         </div>
       )}
 
@@ -823,6 +847,24 @@ function ContractorList({ contractors, assignments, onChanged }) {
     setInviting(null)
   }
 
+  // Generate the contractor's set-up link and copy it, so the admin can share it directly (no email needed)
+  async function copyLink(k) {
+    if (!k.email) { setMsg({ kind: 'warn', text: `${k.name} has no email on file — add one first.` }); return }
+    setInviting(k.identifier); setMsg(null)
+    const { data, error } = await supabase.functions.invoke('invite-contractor', { body: { email: k.email, link_only: true } })
+    if (error || !data?.success || !data.link) {
+      setMsg({ kind: 'danger', text: `Couldn't generate a link for ${k.name}: ${data?.error || error?.message || 'unknown error'}` })
+    } else {
+      try {
+        await navigator.clipboard.writeText(data.link)
+        setMsg({ kind: 'success', text: `Set-up link for ${k.name} copied to clipboard — paste it to them via text or email. (The link expires after a while.)` })
+      } catch {
+        setMsg({ kind: 'info', text: `Set-up link for ${k.name} (copy it manually): ${data.link}` })
+      }
+    }
+    setInviting(null)
+  }
+
   function startEdit(k) {
     setForm({
       name: k.name || '', email: k.email || '', phone: k.phone || '', company_name: k.company_name || '',
@@ -936,16 +978,13 @@ function ContractorList({ contractors, assignments, onChanged }) {
                 <td>{k.w9_on_file ? '✓' : <span style={{ color: 'var(--red)' }}>✗</span>}</td>
                 <td>{openBy[k.identifier] || 0}</td>
                 <td>
-                  {k.user_id
-                    ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                        <span className="badge-s s-completed">Linked</span>
-                        <button className="btn btn-ghost btn-sm" title="Re-send a set-password / sign-in link" disabled={inviting === k.identifier} onClick={() => invite(k)}>
-                          {inviting === k.identifier ? 'Sending…' : '↻ Re-send'}
-                        </button>
-                      </span>
-                    : <button className="btn btn-secondary btn-sm" disabled={inviting === k.identifier} onClick={() => invite(k)}>
-                        {inviting === k.identifier ? 'Sending…' : '✉ Invite'}
-                      </button>}
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                    {k.user_id && <span className="badge-s s-completed">Linked</span>}
+                    <button className="btn btn-secondary btn-sm" title={k.user_id ? 'Re-send a set-password / sign-in link' : 'Send an invite email'} disabled={inviting === k.identifier} onClick={() => invite(k)}>
+                      {inviting === k.identifier ? 'Sending…' : (k.user_id ? '↻ Re-send' : '✉ Invite')}
+                    </button>
+                    <button className="btn btn-ghost btn-sm" title="Copy a set-up link to send them directly (no email needed)" disabled={inviting === k.identifier} onClick={() => copyLink(k)}>🔗 Copy link</button>
+                  </span>
                 </td>
                 <td><button className="btn btn-ghost btn-sm" onClick={() => startEdit(k)}>✏️ Edit</button></td>
               </tr>
