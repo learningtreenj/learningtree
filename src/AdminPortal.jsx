@@ -492,7 +492,48 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
   // Assignment ids whose evaluation has been approved/completed (an earning was created)
   const completedSet = useMemo(() => new Set(earnings.map(e => e.assignment_id)), [earnings])
 
-  const rows = cases.filter(c => {
+  // ── Per-column sort + filter ──
+  const [sortCol, setSortCol] = useState(null)
+  const [sortDir, setSortDir] = useState('asc')
+  const [colFilters, setColFilters] = useState({})
+  const [openMenu, setOpenMenu] = useState(null)
+  useEffect(() => {
+    if (!openMenu) return
+    const h = () => setOpenMenu(null)
+    document.addEventListener('click', h)
+    return () => document.removeEventListener('click', h)
+  }, [openMenu])
+
+  const COLS = [
+    ['case_number', 'Case #'], ['Student_name', 'Student'], ['School_district', 'District'],
+    ['evaluation_type', 'Eval Types'], ['Report_Due_date', 'Due Date'], ['assignments', 'Assignments'], ['status', 'Status'],
+  ]
+  function statusLabel(c, asg) {
+    if (caseFullyComplete(c, asg, completedSet)) return 'Completed'
+    if ((c.Status || '').toLowerCase() === 'completed') return 'In Progress'
+    return c.Status || ''
+  }
+  function colSortVal(col, c) {
+    const asg = byCase[c.id] || []
+    switch (col) {
+      case 'Report_Due_date': return c.Report_Due_date || ''       // ISO date sorts lexically
+      case 'assignments': return asg.length                        // numeric
+      case 'status': return statusLabel(c, asg).toLowerCase()
+      case 'case_number': return (c.case_number || '').toLowerCase()
+      case 'Student_name': return (c.Student_name || '').toLowerCase()
+      case 'School_district': return (c.School_district || '').toLowerCase()
+      case 'evaluation_type': return (c.evaluation_type || '').toLowerCase()
+      default: return ''
+    }
+  }
+  function colFilterVal(col, c) {
+    const asg = byCase[c.id] || []
+    if (col === 'assignments') return asg.map(a => `${a.eval_type || ''} ${a.Contractors?.name || ''}`).join(' ').toLowerCase()
+    if (col === 'Report_Due_date') return `${c.Report_Due_date || ''} ${fmtDate(c.Report_Due_date)}`.toLowerCase()
+    return String(colSortVal(col, c)).toLowerCase()
+  }
+
+  let rows = cases.filter(c => {
     const asg = byCase[c.id] || []
     const allDone = asg.length > 0 && asg.every(a => (a.status || '').toLowerCase() === 'submitted')
     if (chip === 'active' && allDone) return false
@@ -505,6 +546,17 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
     const hay = `${c.case_number || ''} ${c.Student_name || ''} ${c.School_district || ''} ${c.evaluation_type || ''}`.toLowerCase()
     return hay.includes(q.toLowerCase())
   })
+  for (const [key, text] of Object.entries(colFilters)) {
+    const t = (text || '').trim().toLowerCase()
+    if (t) rows = rows.filter(c => colFilterVal(key, c).includes(t))
+  }
+  if (sortCol) {
+    rows = [...rows].sort((a, b) => {
+      const va = colSortVal(sortCol, a), vb = colSortVal(sortCol, b)
+      const cmp = (typeof va === 'number' && typeof vb === 'number') ? va - vb : String(va).localeCompare(String(vb))
+      return sortDir === 'desc' ? -cmp : cmp
+    })
+  }
 
   return (
     <div className="card">
@@ -525,7 +577,33 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
       {rowMsg && <div className={`alert alert-${rowMsg.kind}`}>{rowMsg.text}</div>}
       <div className="tbl-wrap">
         <table>
-          <thead><tr><th>Case #</th><th>Student</th><th>District</th><th>Eval Types</th><th>Due Date</th><th>Assignments</th><th>Status</th></tr></thead>
+          <thead><tr>
+            {COLS.map(([key, label]) => (
+              <th key={key} style={{ position: 'relative', whiteSpace: 'nowrap' }}>
+                <span style={{ cursor: 'pointer', userSelect: 'none' }}
+                  onClick={e => { e.stopPropagation(); setOpenMenu(openMenu === key ? null : key) }}>
+                  {label}{sortCol === key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}{colFilters[key]?.trim() ? ' •' : ''} <span style={{ color: 'var(--muted)' }}>▾</span>
+                </span>
+                {openMenu === key && (
+                  <div onClick={e => e.stopPropagation()}
+                    style={{ position: 'absolute', top: '100%', left: 0, zIndex: 20, background: '#fff', border: '1px solid var(--border)', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.18)', padding: 8, minWidth: 190, textAlign: 'left', textTransform: 'none', letterSpacing: 0, fontWeight: 400 }}>
+                    <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+                      <button className="btn btn-ghost btn-sm" onClick={() => { setSortCol(key); setSortDir('asc') }}>↑ Ascending</button>
+                      <button className="btn btn-ghost btn-sm" onClick={() => { setSortCol(key); setSortDir('desc') }}>↓ Descending</button>
+                    </div>
+                    <input type="text" autoFocus placeholder="Filter text…" value={colFilters[key] || ''}
+                      onChange={e => setColFilters(p => ({ ...p, [key]: e.target.value }))}
+                      onKeyDown={e => { if (e.key === 'Enter') setOpenMenu(null) }}
+                      style={{ width: '100%', padding: '5px 8px', fontSize: 13, border: '1px solid var(--border)', borderRadius: 5 }} />
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6 }}>
+                      <span className="tbl-link" style={{ fontSize: 12 }} onClick={() => { setColFilters(p => ({ ...p, [key]: '' })); if (sortCol === key) setSortCol(null) }}>Clear</span>
+                      <span className="tbl-link" style={{ fontSize: 12 }} onClick={() => setOpenMenu(null)}>Close</span>
+                    </div>
+                  </div>
+                )}
+              </th>
+            ))}
+          </tr></thead>
           <tbody>
             {loading && <tr><td colSpan={7} style={{ color: '#888' }}>Loading…</td></tr>}
             {!loading && rows.length === 0 && <tr><td colSpan={7} style={{ color: '#888' }}>No cases match.</td></tr>}
