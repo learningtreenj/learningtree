@@ -3,6 +3,12 @@ name: Deploy to Vercel (Production)
 # Auto-deploys the portal to production on every push to main.
 # Uses a Vercel token (stored as a GitHub secret) so it works even though
 # this repo lives under a different GitHub account than the Vercel login.
+#
+# IMPORTANT: we let Vercel build REMOTELY (no --prebuilt). Remote builds
+# automatically inject the project's Environment Variables (VITE_SUPABASE_URL,
+# VITE_SUPABASE_KEY). A local `vercel build` in CI does NOT get them baked into
+# the client bundle, which produces a blank page (supabase-js throws
+# "supabaseUrl is required"). Do not switch this back to --prebuilt.
 
 on:
   push:
@@ -26,11 +32,5 @@ jobs:
       - name: Install Vercel CLI
         run: npm install -g vercel@latest
 
-      - name: Pull Vercel project settings & env vars
-        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
-
-      - name: Build
-        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
-
-      - name: Deploy to production
-        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+      - name: Deploy to production (Vercel builds remotely with project env vars)
+        run: vercel deploy --prod --yes --token=${{ secrets.VERCEL_TOKEN }}
