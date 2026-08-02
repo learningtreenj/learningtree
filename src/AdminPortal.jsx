@@ -30,9 +30,12 @@ function ChoiceSelect({ value, options, onChange }) {
 function evalTypeStatus(a, completedSet) {
   if (!a || a.contractor_id == null) return { label: 'Unassigned', cls: 's-unassigned' }
   if (completedSet.has(a.id)) return { label: 'Completed', cls: 's-completed' }
+  const acc = (a.acceptance_status || 'pending').toLowerCase()
+  if (acc === 'declined') return { label: 'Declined', cls: 's-overdue' }
+  if (acc === 'pending') return { label: 'Pending Approval', cls: 's-scheduled' }  // assigned, awaiting the evaluator's acceptance
   const s = (a.status || '').toLowerCase()
-  if (s === 'submitted') return { label: 'Pending Approval', cls: 's-drafting' }
-  return { label: 'Assigned', cls: 's-assigned' }   // Assigned / Contacted / Scheduled / Testing / Draft
+  if (s === 'submitted') return { label: 'Under Review', cls: 's-drafting' }        // accepted + report submitted, awaiting admin QA
+  return { label: 'Assigned', cls: 's-assigned' }                                    // accepted, in progress
 }
 
 // Build one expanded sub-row per requested eval type: matched assignment (evaluator + status) or Unassigned
