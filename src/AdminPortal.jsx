@@ -429,9 +429,16 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
   const [editing, setEditing] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [form, setForm] = useState({})
+  const [evalTypes, setEvalTypes] = useState([])   // checked standard types
+  const [extraEvals, setExtraEvals] = useState([]) // non-standard tokens, preserved as-is
   const setF = (k, v) => setForm(prev => ({ ...prev, [k]: v }))
 
   function startEdit() {
+    // Split the stored eval-type string into the standard checkboxes + any legacy extras
+    const tokens = (c.evaluation_type || '').split(',').map(t => t.trim()).filter(Boolean)
+    const isStd = (tok) => EVAL_TYPES.find(et => et.toLowerCase() === tok.toLowerCase())
+    setEvalTypes(EVAL_TYPES.filter(et => tokens.some(t => t.toLowerCase() === et.toLowerCase())))
+    setExtraEvals(tokens.filter(t => !isStd(t)))
     setForm({
       Student_name: c.Student_name || '', student_dob: c.student_dob || '', grade: c['grade level'] || '',
       Language: c.Language || '', School_district: c.School_district || '', County: c.County || '',
@@ -453,7 +460,7 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
       Language: form.Language || null, School_district: form.School_district || null, County: form.County || null,
       district_contact: form.district_contact || null, case_manager_name: form.case_manager_name || null, case_manager_email: form.case_manager_email || null,
       parents_name: form.parents_name || null, parents_phone: phone ? Number(phone) : null, parents_email: form.parents_email || null,
-      home_address: form.home_address || null, evaluation_type: form.evaluation_type || null, testing_materials: form.testing_materials || null,
+      home_address: form.home_address || null, evaluation_type: [...evalTypes, ...extraEvals].join(', ') || null, testing_materials: form.testing_materials || null,
       reason_for_referral: form.reason_for_referral || null, Report_Due_date: form.Report_Due_date || null, referral_source: form.referral_source || null,
       Status: form.Status || null,
     }
@@ -581,7 +588,19 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
             <div className="form-group"><label>Home Address</label><input value={form.home_address} onChange={e => setF('home_address', e.target.value)} /></div>
           </div>
           <div className="form-row">
-            <div className="form-group"><label>Evaluation Type(s)</label><input value={form.evaluation_type} onChange={e => setF('evaluation_type', e.target.value)} placeholder="e.g. Speech, Psych" /></div>
+            <div className="form-group"><label>Evaluation Type(s)</label>
+              <div className="check-group" style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                {EVAL_TYPES.map(t => (
+                  <label key={t} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, cursor: 'pointer' }}>
+                    <input type="checkbox" checked={evalTypes.includes(t)}
+                      onChange={e => setEvalTypes(p => e.target.checked ? [...p, t] : p.filter(x => x !== t))} /> {t}
+                  </label>
+                ))}
+              </div>
+              {extraEvals.length > 0 && (
+                <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 6 }}>Also on file: {extraEvals.join(', ')}</div>
+              )}
+            </div>
             <div className="form-group"><label>Report Due Date</label><input type="date" value={form.Report_Due_date} onChange={e => setF('Report_Due_date', e.target.value)} /></div>
           </div>
           <div className="form-group"><label>Testing Materials</label><textarea rows={2} value={form.testing_materials} onChange={e => setF('testing_materials', e.target.value)} /></div>

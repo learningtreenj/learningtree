@@ -3,5 +3,6 @@ dist
 .vercel
 *.local
 .DS_Store
-
-.vercel
+.env
+.env.*
+!.env.example
