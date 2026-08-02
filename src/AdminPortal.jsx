@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { supabase, fetchAll, STATUSES, fmtDate, daysLeft, dueColor, parseRate, toISODate } from './supabase.js'
 import { Shell, Badge, StatCard, Meta } from './ui.jsx'
 import { generateInvoiceDoc, RATE_PER_EVAL } from './invoice.js'
@@ -23,6 +23,33 @@ function ChoiceSelect({ value, options, onChange }) {
       {list.map(o => <option key={o} value={o}>{options.includes(o) ? o : `${o} (existing)`}</option>)}
     </select>
   )
+}
+
+// Simplified per-eval-type status for the expandable Cases rows
+function evalTypeStatus(a, caseRow) {
+  if (!a || a.contractor_id == null) return { label: 'Unassigned', cls: 's-unassigned' }
+  const s = (a.status || '').toLowerCase()
+  const caseDone = (caseRow?.Status || '').toLowerCase() === 'completed'
+  if (s === 'completed' || s === 'approved') return { label: 'Completed', cls: 's-completed' }
+  if (s === 'submitted') return caseDone
+    ? { label: 'Completed', cls: 's-completed' }
+    : { label: 'Pending Approval', cls: 's-drafting' }
+  return { label: 'Assigned', cls: 's-assigned' }   // Assigned / Contacted / Scheduled / Testing / Draft
+}
+
+// Build one expanded sub-row per requested eval type: matched assignment (evaluator + status) or Unassigned
+function buildEvalBreakdown(caseRow, asgs) {
+  const requested = (caseRow.evaluation_type || '').split(',').map(t => t.trim()).filter(Boolean)
+  const rows = []
+  const covered = new Set()
+  for (const a of asgs) {
+    rows.push({ evalType: a.eval_type || '—', evaluator: a.Contractors?.name || null, status: evalTypeStatus(a, caseRow) })
+    if (a.eval_type) covered.add(a.eval_type.toLowerCase())
+  }
+  for (const t of requested) {
+    if (!covered.has(t.toLowerCase())) rows.push({ evalType: t, evaluator: null, status: { label: 'Unassigned', cls: 's-unassigned' } })
+  }
+  return rows
 }
 
 // Shows whether the contractor has accepted/declined an assignment
@@ -412,6 +439,8 @@ function NewReferral({ onCreated }) {
 function CaseList({ cases, assignments, loading, onOpen }) {
   const [q, setQ] = useState('')
   const [chip, setChip] = useState('active')
+  const [expanded, setExpanded] = useState({})
+  const toggle = id => setExpanded(p => ({ ...p, [id]: !p[id] }))
   const byCase = useMemo(() => {
     const m = {}
     for (const a of assignments) { m[a.case_id] = m[a.case_id] || []; m[a.case_id].push(a) }
@@ -456,16 +485,46 @@ function CaseList({ cases, assignments, loading, onOpen }) {
             {!loading && rows.length === 0 && <tr><td colSpan={7} style={{ color: '#888' }}>No cases match.</td></tr>}
             {rows.slice(0, 200).map(c => {
               const asg = byCase[c.id] || []
+              const breakdown = expanded[c.id] ? buildEvalBreakdown(c, asg) : null
+              const canExpand = asg.length > 0 || (c.evaluation_type || '').trim().length > 0
               return (
-                <tr key={c.id}>
-                  <td><span className="tbl-link" onClick={() => onOpen(c)}>{c.case_number || c.id}</span></td>
-                  <td>{c.Student_name || '—'}</td>
-                  <td>{c.School_district || '—'}</td>
-                  <td>{c.evaluation_type || '—'}</td>
-                  <td style={dueColor(c.Report_Due_date)}>{fmtDate(c.Report_Due_date)}</td>
-                  <td>{asg.length === 0 ? <span className="badge-s s-unassigned">None</span> : `${asg.filter(a => (a.status || '').toLowerCase() === 'submitted').length}/${asg.length} submitted`}</td>
-                  <td><Badge status={c.Status} /></td>
-                </tr>
+                <Fragment key={c.id}>
+                  <tr>
+                    <td><span className="tbl-link" onClick={() => onOpen(c)}>{c.case_number || c.id}</span></td>
+                    <td>{c.Student_name || '—'}</td>
+                    <td>{c.School_district || '—'}</td>
+                    <td>{c.evaluation_type || '—'}</td>
+                    <td style={dueColor(c.Report_Due_date)}>{fmtDate(c.Report_Due_date)}</td>
+                    <td>
+                      {asg.length === 0 && !canExpand
+                        ? <span className="badge-s s-unassigned">None</span>
+                        : <span className="tbl-link" title="Show evaluation types & evaluators" onClick={() => toggle(c.id)} style={{ whiteSpace: 'nowrap' }}>
+                            <span style={{ display: 'inline-block', width: 12 }}>{expanded[c.id] ? '▾' : '▸'}</span>
+                            {asg.length === 0 ? 'Unassigned' : `${asg.filter(a => (a.status || '').toLowerCase() === 'submitted').length}/${asg.length} submitted`}
+                          </span>}
+                    </td>
+                    <td><Badge status={c.Status} /></td>
+                  </tr>
+                  {expanded[c.id] && (
+                    <tr>
+                      <td colSpan={7} style={{ background: '#f8fafc', padding: '4px 12px 10px 40px' }}>
+                        <table style={{ width: 'auto', minWidth: 460 }}>
+                          <thead><tr><th>Evaluation Type</th><th>Evaluator</th><th>Status</th></tr></thead>
+                          <tbody>
+                            {breakdown.length === 0 && <tr><td colSpan={3} style={{ color: '#888' }}>No evaluation types listed.</td></tr>}
+                            {breakdown.map((r, i) => (
+                              <tr key={i}>
+                                <td style={{ fontWeight: 600 }}>{r.evalType}</td>
+                                <td>{r.evaluator || <span style={{ color: '#888' }}>— not assigned —</span>}</td>
+                                <td><span className={`badge-s ${r.status.cls}`}>{r.status.label}</span></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               )
             })}
           </tbody>
