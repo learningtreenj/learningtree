@@ -1147,15 +1147,18 @@ function ContractorList({ contractors, assignments, onChanged }) {
 
   async function invite(k) {
     if (!k.email) { setMsg({ kind: 'warn', text: `${k.name} has no email on file — add one before inviting.` }); return }
+    if (k.user_id && !window.confirm(`Send ${k.name} a NEW temporary password? This replaces their current password.`)) return
     setInviting(k.identifier); setMsg(null)
     const { data, error } = await supabase.functions.invoke('invite-contractor', { body: { email: k.email } })
-    if (error || !data?.success) setMsg({ kind: 'danger', text: `Invite failed for ${k.name}: ${data?.error || error?.message || 'unknown error'}` })
-    else {
-      const text = data.mode === 'recovery'
-        ? `Set-password link re-sent to ${k.email}. They can use it to finish setting up their login.`
-        : `Invite sent to ${k.email}. Their login links automatically once they set a password.`
-      setMsg({ kind: 'success', text }); onChanged()
-    }
+    if (error || !data?.success) { setMsg({ kind: 'danger', text: `Failed for ${k.name}: ${data?.error || error?.message || 'unknown error'}` }); setInviting(null); return }
+    const base = `${k.name} — login: ${k.email} · temporary password: ${data.password}`
+    setMsg({
+      kind: 'success',
+      text: data.sent
+        ? `${base}. Emailed to them; they can change it after logging in (Profile → Change Password).`
+        : `${base}. Email not sent (${data.warning || 'no email'}) — share this password with them directly.`,
+    })
+    onChanged()
     setInviting(null)
   }
 
@@ -1170,24 +1173,6 @@ function ContractorList({ contractors, assignments, onChanged }) {
     const { data, error } = await supabase.functions.invoke('set-contractor-password', { body: { user_id: k.user_id, password: pw.trim() } })
     if (error || !data?.success) setMsg({ kind: 'danger', text: `Couldn't set password for ${k.name}: ${data?.error || error?.message || 'unknown error'}` })
     else setMsg({ kind: 'success', text: `Password set for ${k.name}. Tell them to log in at portal.learningtreenj.org with ${k.email} and the password you just entered — no email link needed.` })
-    setInviting(null)
-  }
-
-  // Generate the contractor's set-up link and copy it, so the admin can share it directly (no email needed)
-  async function copyLink(k) {
-    if (!k.email) { setMsg({ kind: 'warn', text: `${k.name} has no email on file — add one first.` }); return }
-    setInviting(k.identifier); setMsg(null)
-    const { data, error } = await supabase.functions.invoke('invite-contractor', { body: { email: k.email, link_only: true } })
-    if (error || !data?.success || !data.link) {
-      setMsg({ kind: 'danger', text: `Couldn't generate a link for ${k.name}: ${data?.error || error?.message || 'unknown error'}` })
-    } else {
-      try {
-        await navigator.clipboard.writeText(data.link)
-        setMsg({ kind: 'success', text: `Set-up link for ${k.name} copied to clipboard — paste it to them via text or email. (The link expires after a while.)` })
-      } catch {
-        setMsg({ kind: 'info', text: `Set-up link for ${k.name} (copy it manually): ${data.link}` })
-      }
-    }
     setInviting(null)
   }
 
@@ -1306,11 +1291,10 @@ function ContractorList({ contractors, assignments, onChanged }) {
                 <td>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                     {k.user_id && <span className="badge-s s-completed">Linked</span>}
-                    <button className="btn btn-secondary btn-sm" title={k.user_id ? 'Re-send a set-password / sign-in link' : 'Send an invite email'} disabled={inviting === k.identifier} onClick={() => invite(k)}>
-                      {inviting === k.identifier ? 'Sending…' : (k.user_id ? '↻ Re-send' : '✉ Invite')}
+                    <button className="btn btn-secondary btn-sm" title={k.user_id ? 'Email a new temporary password (replaces the current one)' : 'Create login & email a temporary password'} disabled={inviting === k.identifier} onClick={() => invite(k)}>
+                      {inviting === k.identifier ? 'Sending…' : (k.user_id ? '↻ New temp password' : '✉ Invite')}
                     </button>
-                    <button className="btn btn-ghost btn-sm" title="Copy a set-up link to send them directly (no email needed)" disabled={inviting === k.identifier} onClick={() => copyLink(k)}>🔗 Copy link</button>
-                    {k.user_id && <button className="btn btn-ghost btn-sm" title="Set a temporary password directly (for inboxes whose scanners break the email link)" disabled={inviting === k.identifier} onClick={() => setPassword(k)}>🔑 Set password</button>}
+                    {k.user_id && <button className="btn btn-ghost btn-sm" title="Set a specific password yourself (to read out over the phone)" disabled={inviting === k.identifier} onClick={() => setPassword(k)}>🔑 Set password</button>}
                   </span>
                 </td>
                 <td><button className="btn btn-ghost btn-sm" onClick={() => startEdit(k)}>✏️ Edit</button></td>

@@ -371,12 +371,26 @@ function Profile({ contractor }) {
   const [phone, setPhone] = useState(contractor.phone || '')
   const [address, setAddress] = useState(contractor.address || '')
   const [msg, setMsg] = useState(null)
+  const [pw1, setPw1] = useState('')
+  const [pw2, setPw2] = useState('')
+  const [pwMsg, setPwMsg] = useState(null)
+  const [pwBusy, setPwBusy] = useState(false)
 
   async function save() {
     const { error } = await supabase.from('Contractors')
       .update({ phone: phone || null, address: address || null })
       .eq('identifier', contractor.identifier)
     setMsg(error ? { kind: 'danger', text: error.message } : { kind: 'success', text: 'Profile updated.' })
+  }
+
+  async function changePassword() {
+    if (pw1.length < 6) { setPwMsg({ kind: 'warn', text: 'Password must be at least 6 characters.' }); return }
+    if (pw1 !== pw2) { setPwMsg({ kind: 'warn', text: 'The two passwords do not match.' }); return }
+    setPwBusy(true); setPwMsg(null)
+    const { error } = await supabase.auth.updateUser({ password: pw1 })
+    if (error) setPwMsg({ kind: 'danger', text: error.message })
+    else { setPwMsg({ kind: 'success', text: 'Password changed. Use it next time you log in.' }); setPw1(''); setPw2('') }
+    setPwBusy(false)
   }
 
   return (
@@ -397,6 +411,19 @@ function Profile({ contractor }) {
       <div className="form-group"><label>Mailing Address</label><input value={address} onChange={e => setAddress(e.target.value)} /></div>
       <button className="btn btn-primary" onClick={save}>Save Changes</button>
       <div style={{ marginTop: 10, fontSize: 12, color: '#888' }}>To change your name, rate, or credentials on file, contact the office.</div>
+
+      <div style={{ borderTop: '1px solid #e5e7eb', marginTop: 18, paddingTop: 14 }}>
+        <div className="card-title" style={{ marginBottom: 8 }}>🔒 Change Password</div>
+        {pwMsg && <div className={`alert alert-${pwMsg.kind}`}>{pwMsg.text}</div>}
+        <div className="form-group"><label>New Password</label>
+          <input type="password" value={pw1} onChange={e => setPw1(e.target.value)} autoComplete="new-password" placeholder="At least 6 characters" />
+        </div>
+        <div className="form-group"><label>Confirm New Password</label>
+          <input type="password" value={pw2} onChange={e => setPw2(e.target.value)} autoComplete="new-password" />
+        </div>
+        <button className="btn btn-secondary" disabled={pwBusy} onClick={changePassword}>{pwBusy ? 'Saving…' : 'Update Password'}</button>
+        <div style={{ marginTop: 8, fontSize: 12, color: '#888' }}>If the office gave you a temporary password, set your own here.</div>
+      </div>
     </div>
   )
 }
