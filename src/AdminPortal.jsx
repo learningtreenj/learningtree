@@ -143,6 +143,7 @@ function NewReferral({ onCreated }) {
   const [msg, setMsg] = useState(null)
   const [parsing, setParsing] = useState(false)
   const [parsedFrom, setParsedFrom] = useState(null)
+  const [dragActive, setDragActive] = useState(false)
   const [busy, setBusy] = useState(false)
   const set = (k, v) => setF(prev => ({ ...prev, [k]: v }))
 
@@ -253,11 +254,28 @@ function NewReferral({ onCreated }) {
       {msg && <div className={`alert alert-${msg.kind}`}>{msg.text}</div>}
       <div className="alert alert-info">A case number is assigned automatically. After creating the case you can assign contractors.</div>
 
-      <label className="upload-zone" style={{ display: 'block', marginBottom: 14, opacity: parsing ? 0.6 : 1, cursor: parsing ? 'default' : 'pointer' }}>
-        <div style={{ fontSize: 22, marginBottom: 4 }}>📄</div>
-        <div><strong>{parsing ? 'Reading document…' : 'Auto-fill from a referral form'}</strong></div>
-        <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3 }}>
-          Drop or choose a PDF or Word (.docx) referral — fields below fill in automatically. Review before creating.
+      <label className="upload-zone"
+        style={{
+          display: 'block', marginBottom: 14, opacity: parsing ? 0.6 : 1,
+          cursor: parsing ? 'default' : 'pointer',
+          borderColor: dragActive ? 'var(--accent)' : undefined,
+          background: dragActive ? 'var(--accent-light)' : undefined,
+        }}
+        onDragEnter={e => { e.preventDefault(); e.stopPropagation(); if (!parsing) setDragActive(true) }}
+        onDragOver={e => { e.preventDefault(); e.stopPropagation(); if (!parsing) setDragActive(true) }}
+        onDragLeave={e => { e.preventDefault(); e.stopPropagation(); setDragActive(false) }}
+        onDrop={e => {
+          e.preventDefault(); e.stopPropagation(); setDragActive(false)
+          if (parsing) return
+          const file = e.dataTransfer?.files?.[0]
+          if (file) parseDocument(file)
+        }}>
+        <div style={{ fontSize: 22, marginBottom: 4, pointerEvents: 'none' }}>📄</div>
+        <div style={{ pointerEvents: 'none' }}>
+          <strong>{parsing ? 'Reading document…' : dragActive ? 'Drop the referral to read it' : 'Drag & drop or click to auto-fill from a referral form'}</strong>
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3, pointerEvents: 'none' }}>
+          PDF or Word (.docx) — fields below fill in automatically. Review before creating.
         </div>
         <input type="file" accept=".pdf,.docx" style={{ display: 'none' }} disabled={parsing}
           onChange={e => { parseDocument(e.target.files[0]); e.target.value = '' }} />
