@@ -10,6 +10,21 @@ const EVAL_TYPES = ['Speech', 'Educational', 'Psych', 'Social', 'OT', 'PT']
 const CASE_STATUSES = ['Unassigned', 'Assigned', 'In Progress', 'Pending Approval', 'Completed']
 const GRADES = ['Pre-K', 'K', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12']
 
+// Canonical picklists for the contractor editor
+const CONTRACTOR_FIELDS = ['Speech Pathologist', 'Psychologist', 'Learning Consultant', 'Social Worker', 'Occupational Therapist', 'Physical Therapist', 'Translator', 'Interpreter']
+const LANGUAGES = ['English', 'Spanish', 'Portuguese', 'Arabic', 'Creole', 'Russian', 'Chinese', 'Mandarin', 'Cantonese', 'Hebrew', 'Polish', 'Korean', 'Italian', 'French', 'Turkish', 'Vietnamese', 'Urdu', 'Hindi', 'Punjabi', 'Gujarati', 'Bengali', 'Tamil', 'Telugu', 'Marathi', 'Malayalam', 'Kannada', 'Tagalog', 'Japanese', 'Ukrainian', 'Persian', 'Greek', 'Indonesian']
+
+// Dropdown that preserves an existing non-standard value as a selectable option so edits never silently drop it
+function ChoiceSelect({ value, options, onChange }) {
+  const list = (!value || options.includes(value)) ? options : [value, ...options]
+  return (
+    <select value={value || ''} onChange={e => onChange(e.target.value)}>
+      <option value="">— Select —</option>
+      {list.map(o => <option key={o} value={o}>{options.includes(o) ? o : `${o} (existing)`}</option>)}
+    </select>
+  )
+}
+
 export default function AdminPortal({ user }) {
   const [screen, setScreen] = useState('dashboard')
   const [cases, setCases] = useState([])
@@ -804,12 +819,15 @@ function ContractorList({ contractors, assignments, onChanged }) {
         </div>
         <div className="form-group"><label>Company Name</label><input value={form.company_name} onChange={e => setF('company_name', e.target.value)} /></div>
         <div className="form-row">
-          <div className="form-group"><label>Field / Specialty</label><input value={form.field} onChange={e => setF('field', e.target.value)} placeholder="e.g. Speech, Psych" /></div>
+          <div className="form-group"><label>Field / Specialty</label>
+            <ChoiceSelect value={form.field} options={CONTRACTOR_FIELDS} onChange={v => setF('field', v)} /></div>
           <div className="form-group"><label>Rate</label><input value={form.current_rate} onChange={e => setF('current_rate', e.target.value)} placeholder="e.g. $880" /></div>
         </div>
         <div className="form-row">
-          <div className="form-group"><label>Primary Language</label><input value={form.language} onChange={e => setF('language', e.target.value)} /></div>
-          <div className="form-group"><label>Second Language</label><input value={form.language_2} onChange={e => setF('language_2', e.target.value)} /></div>
+          <div className="form-group"><label>Primary Language</label>
+            <ChoiceSelect value={form.language} options={LANGUAGES} onChange={v => setF('language', v)} /></div>
+          <div className="form-group"><label>Second Language</label>
+            <ChoiceSelect value={form.language_2} options={LANGUAGES} onChange={v => setF('language_2', v)} /></div>
         </div>
         <div className="form-group"><label>Address</label><input value={form.address} onChange={e => setF('address', e.target.value)} /></div>
         <div className="form-row">
