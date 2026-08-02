@@ -25,6 +25,14 @@ function ChoiceSelect({ value, options, onChange }) {
   )
 }
 
+// Shows whether the contractor has accepted/declined an assignment
+function AcceptBadge({ status }) {
+  const s = (status || 'pending').toLowerCase()
+  if (s === 'accepted') return <span className="badge-s s-completed">✓ Accepted</span>
+  if (s === 'declined') return <span className="badge-s s-overdue">✕ Declined</span>
+  return <span className="badge-s s-pending">Awaiting</span>
+}
+
 export default function AdminPortal({ user }) {
   const [screen, setScreen] = useState('dashboard')
   const [cases, setCases] = useState([])
@@ -126,15 +134,16 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
         <div className="card-title">Upcoming Due Dates</div>
         <div className="tbl-wrap">
           <table>
-            <thead><tr><th>Case</th><th>Student</th><th>Eval Type</th><th>Contractor</th><th>Due Date</th><th>Days Left</th><th>Status</th></tr></thead>
+            <thead><tr><th>Case</th><th>Student</th><th>Eval Type</th><th>Contractor</th><th>Accepted?</th><th>Due Date</th><th>Days Left</th><th>Status</th></tr></thead>
             <tbody>
-              {loading && <tr><td colSpan={7} style={{ color: '#888' }}>Loading…</td></tr>}
+              {loading && <tr><td colSpan={8} style={{ color: '#888' }}>Loading…</td></tr>}
               {openAssignments.slice(0, 12).map(a => (
                 <tr key={a.id}>
                   <td><span className="tbl-link" onClick={() => { const c = cases.find(x => x.id === a.case_id); if (c) onOpenCase(c) }}>{a.Cases?.case_number || a.case_id}</span></td>
                   <td>{a.Cases?.Student_name || '—'}</td>
                   <td>{a.eval_type || '—'}</td>
                   <td>{a.Contractors?.name || <span className="badge-s s-unassigned">Unassigned</span>}</td>
+                  <td>{a.Contractors?.name ? <AcceptBadge status={a.acceptance_status} /> : '—'}</td>
                   <td style={dueColor(a.report_due_date)}>{fmtDate(a.report_due_date)}</td>
                   <td style={dueColor(a.report_due_date)}>{daysLeft(a.report_due_date) ?? '—'}</td>
                   <td><Badge status={a.status} /></td>
@@ -515,23 +524,35 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
   async function assign() {
     if (!newAsg.contractor_id || !newAsg.eval_type) { setMsg({ kind: 'warn', text: 'Pick a contractor and evaluation type.' }); return }
     setBusy(true); setMsg(null)
-    const { error } = await supabase.from('Assignments').insert({
+    const { data: inserted, error } = await supabase.from('Assignments').insert({
       case_id: c.id,
       contractor_id: Number(newAsg.contractor_id),
       eval_type: newAsg.eval_type,
       report_due_date: newAsg.report_due_date || null,
       status: 'Assigned',
       acceptance_status: 'pending',
-    })
-    if (error) setMsg({ kind: 'danger', text: error.message })
-    else {
-      if ((c.Status || '').toLowerCase() === 'unassigned') {
-        await supabase.from('Cases').update({ Status: 'Assigned' }).eq('id', c.id)
-      }
-      setMsg({ kind: 'success', text: 'Contractor assigned.' })
-      setNewAsg({ contractor_id: '', eval_type: '', report_due_date: c.Report_Due_date || '' })
-      onChanged()
+    }).select('id').single()
+    if (error) { setMsg({ kind: 'danger', text: error.message }); setBusy(false); return }
+
+    if ((c.Status || '').toLowerCase() === 'unassigned') {
+      await supabase.from('Cases').update({ Status: 'Assigned' }).eq('id', c.id)
     }
+
+    // Email the contractor. The assignment is already saved, so email trouble
+    // is only a warning — never blocks the assignment.
+    let note = { kind: 'success', text: 'Contractor assigned — notification emailed.' }
+    try {
+      const { data: em, error: emErr } = await supabase.functions.invoke('notify-assignment', { body: { assignment_id: inserted.id } })
+      if (emErr || !em?.success) note = { kind: 'warn', text: `Contractor assigned, but the email notice couldn't be sent (${em?.error || emErr?.message || 'unknown error'}).` }
+      else if (em.skipped_no_email) note = { kind: 'warn', text: 'Contractor assigned. No email is on file for this contractor, so no notice was sent.' }
+      else note = { kind: 'success', text: `Contractor assigned — notification emailed to ${em.sent_to}.` }
+    } catch (e) {
+      note = { kind: 'warn', text: `Contractor assigned, but the email notice failed: ${e.message}` }
+    }
+
+    setMsg(note)
+    setNewAsg({ contractor_id: '', eval_type: '', report_due_date: c.Report_Due_date || '' })
+    onChanged()
     setBusy(false)
   }
 
@@ -652,17 +673,26 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
             <div className="card-title">Assignments on this Case</div>
             <div className="tbl-wrap">
               <table>
-                <thead><tr><th>Contractor</th><th>Eval Type</th><th>Due</th><th>Testing</th><th>Status</th><th>Report</th></tr></thead>
+                <thead><tr><th>Contractor</th><th>Eval Type</th><th>Accepted?</th><th>Due</th><th>Testing</th><th>Status</th><th>Report</th></tr></thead>
                 <tbody>
-                  {assignments.length === 0 && <tr><td colSpan={6} style={{ color: '#888' }}>No contractors assigned yet.</td></tr>}
+                  {assignments.length === 0 && <tr><td colSpan={7} style={{ color: '#888' }}>No contractors assigned yet.</td></tr>}
                   {assignments.map(a => (
                     <tr key={a.id}>
                       <td>{a.Contractors?.name || '—'}</td>
                       <td>{a.eval_type || '—'}</td>
+                      <td><AcceptBadge status={a.acceptance_status} /></td>
                       <td style={dueColor(a.report_due_date)}>{fmtDate(a.report_due_date)}</td>
                       <td>{a.testing_date ? fmtDate(a.testing_date) : '—'}</td>
                       <td><Badge status={a.status} /></td>
-                      <td>{a.report_url ? <span className="tbl-link" onClick={() => viewReport(a.report_url)}>📄 View</span> : '—'}</td>
+                      <td>{(() => {
+                        const files = Array.isArray(a.report_files) && a.report_files.length
+                          ? a.report_files
+                          : (a.report_url ? [{ path: a.report_url, name: a.report_url.split('/').pop() }] : [])
+                        if (!files.length) return '—'
+                        return files.map((f, i) => (
+                          <div key={f.path || i}><span className="tbl-link" onClick={() => viewReport(f.path)}>📄 {files.length > 1 ? (f.name || f.path.split('/').pop()) : 'View'}</span></div>
+                        ))
+                      })()}</td>
                     </tr>
                   ))}
                 </tbody>

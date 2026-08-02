@@ -146,6 +146,12 @@ function AssignmentDetail({ assignment, contractor, onBack }) {
   const [testingDate, setTestingDate] = useState(a.testing_date || '')
   const [notes, setNotes] = useState(a.notes || '')
   const [reportUrl, setReportUrl] = useState(a.report_url || '')
+  // Multiple report files. Fall back to the legacy single report_url for older assignments.
+  const [reportFiles, setReportFiles] = useState(
+    Array.isArray(a.report_files) && a.report_files.length
+      ? a.report_files
+      : (a.report_url ? [{ path: a.report_url, name: a.report_url.split('/').pop() }] : [])
+  )
   const [acceptance, setAcceptance] = useState(a.acceptance_status)
   const [declining, setDeclining] = useState(false)
   const [declineReason, setDeclineReason] = useState('')
@@ -178,23 +184,35 @@ function AssignmentDetail({ assignment, contractor, onBack }) {
     return !error
   }
 
-  async function uploadReport(file) {
-    if (!file) return
+  async function uploadReports(fileList) {
+    const files = Array.from(fileList || [])
+    if (!files.length) return
     setBusy(true); setMsg(null)
-    const path = `${contractor.identifier}/${a.id}/${file.name}`
-    const { error: upErr } = await supabase.storage.from('reports').upload(path, file, { upsert: true })
-    if (upErr) { setMsg({ kind: 'danger', text: `Upload failed: ${upErr.message}` }); setBusy(false); return }
+    const uploaded = []
+    for (const file of files) {
+      const path = `${contractor.identifier}/${a.id}/${file.name}`
+      const { error: upErr } = await supabase.storage.from('reports').upload(path, file, { upsert: true })
+      if (upErr) { setMsg({ kind: 'danger', text: `Upload failed for ${file.name}: ${upErr.message}` }); setBusy(false); return }
+      uploaded.push({ path, name: file.name, uploaded_at: new Date().toISOString() })
+    }
+    // Merge with existing files; a re-uploaded filename replaces its prior entry.
+    const merged = [...reportFiles.filter(f => !uploaded.some(u => u.path === f.path)), ...uploaded]
     const { error } = await supabase.from('Assignments').update({
-      report_url: path, status: 'Submitted', submitted_at: new Date().toISOString(),
+      report_files: merged,
+      report_url: merged[merged.length - 1].path,   // keep latest as the primary for back-compat
+      status: 'Submitted', submitted_at: new Date().toISOString(),
       testing_date: testingDate || null, notes: notes || null,
     }).eq('id', a.id)
     if (error) setMsg({ kind: 'danger', text: error.message })
-    else { setReportUrl(path); setStatus('Submitted'); setMsg({ kind: 'success', text: 'Report uploaded and marked as Submitted. Thank you!' }) }
+    else {
+      setReportFiles(merged); setReportUrl(merged[merged.length - 1].path); setStatus('Submitted')
+      setMsg({ kind: 'success', text: `${uploaded.length} file${uploaded.length === 1 ? '' : 's'} uploaded and marked as Submitted. Thank you!` })
+    }
     setBusy(false)
   }
 
-  async function viewReport() {
-    const { data, error } = await supabase.storage.from('reports').createSignedUrl(reportUrl, 300)
+  async function viewReport(path) {
+    const { data, error } = await supabase.storage.from('reports').createSignedUrl(path, 300)
     if (!error && data?.signedUrl) window.open(data.signedUrl, '_blank')
   }
 
@@ -312,17 +330,23 @@ function AssignmentDetail({ assignment, contractor, onBack }) {
           </div>
 
           <div className="card">
-            <div className="card-title">📤 Upload Completed Report</div>
+            <div className="card-title">📤 Upload Completed Report(s)</div>
             <label className="upload-zone" style={{ display: 'block' }}>
               <div style={{ fontSize: 24, marginBottom: 6 }}>📄</div>
-              <div><strong>Click to choose your report file</strong></div>
-              <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3 }}>DOCX preferred · PDF accepted · Max 50 MB</div>
-              <input type="file" accept=".pdf,.doc,.docx" style={{ display: 'none' }}
-                onChange={e => uploadReport(e.target.files[0])} disabled={busy} />
+              <div><strong>Click to choose one or more files</strong></div>
+              <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3 }}>DOCX preferred · PDF accepted · Max 50 MB each · You can select multiple files at once</div>
+              <input type="file" accept=".pdf,.doc,.docx" multiple style={{ display: 'none' }}
+                onChange={e => uploadReports(e.target.files)} disabled={busy} />
             </label>
             <div style={{ marginTop: 8, fontSize: 12, color: '#888' }}>
-              {reportUrl
-                ? <>Uploaded: <span className="tbl-link" onClick={viewReport}>📄 {reportUrl.split('/').pop()}</span> — uploading again replaces it.</>
+              {reportFiles.length
+                ? <>
+                    <div style={{ marginBottom: 4 }}>Uploaded {reportFiles.length} file{reportFiles.length === 1 ? '' : 's'}:</div>
+                    {reportFiles.map(f => (
+                      <div key={f.path}><span className="tbl-link" onClick={() => viewReport(f.path)}>📄 {f.name || f.path.split('/').pop()}</span></div>
+                    ))}
+                    <div style={{ marginTop: 4 }}>Uploading more adds to this list (a file with the same name replaces the old one).</div>
+                  </>
                 : 'No report uploaded yet. Uploading marks this assignment as Submitted.'}
             </div>
           </div>
