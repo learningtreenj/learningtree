@@ -44,11 +44,11 @@ function buildEvalBreakdown(caseRow, asgs, completedSet) {
   const rows = []
   const covered = new Set()
   for (const a of asgs) {
-    rows.push({ evalType: a.eval_type || '—', evaluator: a.Contractors?.name || null, status: evalTypeStatus(a, completedSet) })
+    rows.push({ evalType: a.eval_type || '—', evaluator: a.Contractors?.name || null, status: evalTypeStatus(a, completedSet), a })
     if (a.eval_type) covered.add(a.eval_type.toLowerCase())
   }
   for (const t of requested) {
-    if (!covered.has(t.toLowerCase())) rows.push({ evalType: t, evaluator: null, status: { label: 'Unassigned', cls: 's-unassigned' } })
+    if (!covered.has(t.toLowerCase())) rows.push({ evalType: t, evaluator: null, status: { label: 'Unassigned', cls: 's-unassigned' }, a: null })
   }
   return rows
 }
@@ -139,8 +139,8 @@ export default function AdminPortal({ user }) {
       {screen === 'dashboard' && <Dashboard assignments={assignments} openAssignments={openAssignments} dueThisWeek={dueThisWeek} loading={loading}
         onOpenCase={c => { setSelectedCase(c); setScreen('casedetail') }} cases={cases} />}
       {screen === 'referral' && <NewReferral onCreated={c => { load(); setSelectedCase(c); setScreen('casedetail') }} />}
-      {screen === 'cases' && <CaseList cases={cases} assignments={assignments} earnings={earnings} loading={loading}
-        onOpen={c => { setSelectedCase(c); setScreen('casedetail') }} />}
+      {screen === 'cases' && <CaseList cases={cases} assignments={assignments} contractors={contractors} earnings={earnings} loading={loading}
+        onOpen={c => { setSelectedCase(c); setScreen('casedetail') }} onChanged={load} />}
       {screen === 'casedetail' && selectedCase && <CaseDetail caseRow={selectedCase} assignments={assignments.filter(a => a.case_id === selectedCase.id)}
         allAssignments={assignments} contractors={contractors} onBack={() => setScreen('cases')} onChanged={load} />}
       {screen === 'contractors' && <ContractorList contractors={contractors} assignments={assignments} onChanged={load} />}
@@ -447,11 +447,43 @@ function NewReferral({ onCreated }) {
   )
 }
 
-function CaseList({ cases, assignments, earnings = [], loading, onOpen }) {
+function CaseList({ cases, assignments, contractors = [], earnings = [], loading, onOpen, onChanged }) {
   const [q, setQ] = useState('')
   const [chip, setChip] = useState('active')
   const [expanded, setExpanded] = useState({})
   const toggle = id => setExpanded(p => ({ ...p, [id]: !p[id] }))
+  const [reassignId, setReassignId] = useState(null)
+  const [reassignTo, setReassignTo] = useState('')
+  const [confirmRemoveId, setConfirmRemoveId] = useState(null)
+  const [rowBusy, setRowBusy] = useState(false)
+  const [rowMsg, setRowMsg] = useState(null)
+
+  function startReassign(a) { setReassignId(a.id); setReassignTo(String(a.contractor_id ?? '')); setConfirmRemoveId(null); setRowMsg(null) }
+
+  async function saveReassign(a) {
+    if (!reassignTo) { setRowMsg({ kind: 'warn', text: 'Pick a contractor to reassign to.' }); return }
+    if (String(reassignTo) === String(a.contractor_id)) { setReassignId(null); return }
+    setRowBusy(true); setRowMsg(null)
+    const { error } = await supabase.from('Assignments').update({
+      contractor_id: Number(reassignTo),
+      acceptance_status: 'pending', accepted_at: null, declined_at: null, decline_reason: null, status: 'Assigned',
+    }).eq('id', a.id)
+    if (error) { setRowMsg({ kind: 'danger', text: error.message }); setRowBusy(false); return }
+    let text = 'Assignment reassigned.'
+    try {
+      const { data: em } = await supabase.functions.invoke('notify-assignment', { body: { assignment_id: a.id } })
+      if (em?.success && em.sent_to) text = `Reassigned — notification emailed to ${em.sent_to}.`
+      else if (em?.skipped_no_email) text = 'Reassigned. New contractor has no email on file, so no notice was sent.'
+    } catch { /* email is best-effort */ }
+    setReassignId(null); setRowMsg({ kind: 'success', text }); onChanged && onChanged(); setRowBusy(false)
+  }
+
+  async function removeAssignment(a) {
+    setRowBusy(true); setRowMsg(null)
+    const { error } = await supabase.rpc('admin_delete_assignment', { p_assignment_id: a.id })
+    if (error) { setRowMsg({ kind: 'danger', text: error.message }); setRowBusy(false); return }
+    setConfirmRemoveId(null); setRowMsg({ kind: 'success', text: 'Assignment removed.' }); onChanged && onChanged(); setRowBusy(false)
+  }
   const byCase = useMemo(() => {
     const m = {}
     for (const a of assignments) { m[a.case_id] = m[a.case_id] || []; m[a.case_id].push(a) }
@@ -490,6 +522,7 @@ function CaseList({ cases, assignments, earnings = [], loading, onOpen }) {
           </button>
         </div>
       </div>
+      {rowMsg && <div className={`alert alert-${rowMsg.kind}`}>{rowMsg.text}</div>}
       <div className="tbl-wrap">
         <table>
           <thead><tr><th>Case #</th><th>Student</th><th>District</th><th>Eval Types</th><th>Due Date</th><th>Assignments</th><th>Status</th></tr></thead>
@@ -527,15 +560,53 @@ function CaseList({ cases, assignments, earnings = [], loading, onOpen }) {
                     </td>
                   </tr>
                   {expanded[c.id] && breakdown.map((r, i) => (
-                    <tr key={`${c.id}-e-${i}`} style={{ background: '#f8fafc' }}>
-                      <td></td>
-                      <td></td>
-                      <td></td>
-                      <td style={{ paddingLeft: 24, fontWeight: 600 }}>↳ {r.evalType}</td>
-                      <td></td>
-                      <td>{r.evaluator || <span style={{ color: '#888' }}>— not assigned —</span>}</td>
-                      <td><span className={`badge-s ${r.status.cls}`}>{r.status.label}</span></td>
-                    </tr>
+                    <Fragment key={`${c.id}-e-${i}`}>
+                      <tr style={{ background: '#f8fafc' }}>
+                        <td></td>
+                        <td></td>
+                        <td></td>
+                        <td style={{ paddingLeft: 24, fontWeight: 600 }}>↳ {r.evalType}</td>
+                        <td></td>
+                        <td style={{ whiteSpace: 'nowrap' }}>
+                          {r.evaluator || <span style={{ color: '#888' }}>— not assigned —</span>}
+                          {r.a && <>
+                            {' '}<button className="btn btn-ghost btn-sm" title="Reassign to a different contractor" disabled={rowBusy} onClick={() => startReassign(r.a)}>✏️</button>
+                            {' '}<button className="btn btn-danger-outline btn-sm" title="Remove this assignment" disabled={rowBusy} onClick={() => { setConfirmRemoveId(r.a.id); setReassignId(null); setRowMsg(null) }}>🗑</button>
+                          </>}
+                        </td>
+                        <td><span className={`badge-s ${r.status.cls}`}>{r.status.label}</span></td>
+                      </tr>
+                      {r.a && reassignId === r.a.id && (
+                        <tr>
+                          <td colSpan={7} style={{ background: 'var(--accent-light)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', paddingLeft: 40 }}>
+                              <strong style={{ fontSize: 13 }}>Reassign {r.evalType} to:</strong>
+                              <select value={reassignTo} onChange={e => setReassignTo(e.target.value)} style={{ padding: '6px 10px', minWidth: 240 }}>
+                                <option value="">Select contractor…</option>
+                                {contractors.map(k => (
+                                  <option key={k.identifier} value={k.identifier}>
+                                    {k.name}{[k.field, [k.language, k.language_2].filter(Boolean).join('/')].filter(Boolean).length ? ` — ${[k.field, [k.language, k.language_2].filter(Boolean).join('/')].filter(Boolean).join(' · ')}` : ''}
+                                  </option>
+                                ))}
+                              </select>
+                              <button className="btn btn-primary btn-sm" disabled={rowBusy} onClick={() => saveReassign(r.a)}>Save &amp; notify</button>
+                              <button className="btn btn-ghost btn-sm" disabled={rowBusy} onClick={() => setReassignId(null)}>Cancel</button>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                      {r.a && confirmRemoveId === r.a.id && (
+                        <tr>
+                          <td colSpan={7} style={{ background: 'var(--red-bg)' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', paddingLeft: 40 }}>
+                              <span style={{ fontSize: 13, color: 'var(--red)' }}>Remove <strong>{r.evalType}</strong>{r.evaluator ? ` — ${r.evaluator}` : ''}? Deletes just this assignment, not the case.</span>
+                              <button className="btn btn-danger btn-sm" disabled={rowBusy} onClick={() => removeAssignment(r.a)}>Yes, remove</button>
+                              <button className="btn btn-ghost btn-sm" disabled={rowBusy} onClick={() => setConfirmRemoveId(null)}>Cancel</button>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
                   ))}
                 </Fragment>
               )
