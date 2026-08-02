@@ -814,7 +814,12 @@ function ContractorList({ contractors, assignments, onChanged }) {
     setInviting(k.identifier); setMsg(null)
     const { data, error } = await supabase.functions.invoke('invite-contractor', { body: { email: k.email } })
     if (error || !data?.success) setMsg({ kind: 'danger', text: `Invite failed for ${k.name}: ${data?.error || error?.message || 'unknown error'}` })
-    else { setMsg({ kind: 'success', text: `Invite email sent to ${k.email}. Their login links automatically when they set a password.` }); onChanged() }
+    else {
+      const text = data.mode === 'recovery'
+        ? `Set-password link re-sent to ${k.email}. They can use it to finish setting up their login.`
+        : `Invite sent to ${k.email}. Their login links automatically once they set a password.`
+      setMsg({ kind: 'success', text }); onChanged()
+    }
     setInviting(null)
   }
 
@@ -932,7 +937,12 @@ function ContractorList({ contractors, assignments, onChanged }) {
                 <td>{openBy[k.identifier] || 0}</td>
                 <td>
                   {k.user_id
-                    ? <span className="badge-s s-completed">Linked</span>
+                    ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                        <span className="badge-s s-completed">Linked</span>
+                        <button className="btn btn-ghost btn-sm" title="Re-send a set-password / sign-in link" disabled={inviting === k.identifier} onClick={() => invite(k)}>
+                          {inviting === k.identifier ? 'Sending…' : '↻ Re-send'}
+                        </button>
+                      </span>
                     : <button className="btn btn-secondary btn-sm" disabled={inviting === k.identifier} onClick={() => invite(k)}>
                         {inviting === k.identifier ? 'Sending…' : '✉ Invite'}
                       </button>}
