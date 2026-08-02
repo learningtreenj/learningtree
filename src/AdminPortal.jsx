@@ -157,6 +157,14 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
   )
 }
 
+// Base64-encode a byte array in chunks (btoa on a huge binary string overflows the stack)
+function bytesToBase64(bytes) {
+  let bin = ''
+  const chunk = 0x8000
+  for (let i = 0; i < bytes.length; i += chunk) bin += String.fromCharCode(...bytes.subarray(i, i + chunk))
+  return btoa(bin)
+}
+
 function NewReferral({ onCreated }) {
   const empty = {
     Student_name: '', student_dob: '', grade: '', Language: '', School_district: '', County: '',
@@ -223,18 +231,33 @@ function NewReferral({ onCreated }) {
   async function parseDocument(file) {
     if (!file) return
     setParsing(true); setMsg(null); setParsedFrom(null)
-    let text
+    const ext = file.name.split('.').pop()?.toLowerCase()
+    let text = ''
     try {
       text = await extractTextFromFile(file)
     } catch (err) {
-      setMsg({ kind: 'danger', text: err.message }); setParsing(false); return
+      // A scanned PDF may throw or return nothing here — we can still OCR it below.
+      if (ext !== 'pdf') { setMsg({ kind: 'danger', text: err.message }); setParsing(false); return }
     }
-    if (!text || text.trim().length < 20) {
-      setMsg({ kind: 'warn', text: 'Could not read any text from that file. If it is a scanned image, enter the fields manually.' })
+
+    let invokeBody
+    if (text && text.trim().length >= 20) {
+      invokeBody = { text }
+    } else if (ext === 'pdf') {
+      // No embedded text (scanned/image PDF) — send the PDF itself for AI OCR.
+      setMsg({ kind: 'info', text: 'No text layer found — reading the scanned document with AI. This can take a little longer…' })
+      try {
+        const buf = await file.arrayBuffer()
+        invokeBody = { pdf_base64: bytesToBase64(new Uint8Array(buf)) }
+      } catch (err) {
+        setMsg({ kind: 'danger', text: `Could not read the PDF: ${err.message}` }); setParsing(false); return
+      }
+    } else {
+      setMsg({ kind: 'warn', text: 'Could not read any text from that file. Please enter the fields manually.' })
       setParsing(false); return
     }
 
-    const { data, error } = await supabase.functions.invoke('parse-referral', { body: { text } })
+    const { data, error } = await supabase.functions.invoke('parse-referral', { body: invokeBody })
     if (error || !data?.success) {
       setMsg({ kind: 'danger', text: `Could not parse the document: ${data?.error || error?.message || 'unknown error'}` })
       setParsing(false); return
