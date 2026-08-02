@@ -603,6 +603,20 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
     if (!error && data?.signedUrl) window.open(data.signedUrl, '_blank')
   }
 
+  async function uploadReferral(file) {
+    if (!file) return
+    setBusy(true); setMsg(null)
+    const path = `${c.id}/${file.name}`
+    const { error: upErr } = await supabase.storage.from('referrals').upload(path, file, { upsert: true })
+    if (upErr) { setMsg({ kind: 'danger', text: `Upload failed: ${upErr.message}` }); setBusy(false); return }
+    const { error } = await supabase.from('Cases').update({ referral_file_path: path, referral_file_name: file.name }).eq('id', c.id)
+    if (error) { setMsg({ kind: 'danger', text: error.message }); setBusy(false); return }
+    setC(prev => ({ ...prev, referral_file_path: path, referral_file_name: file.name }))
+    setMsg({ kind: 'success', text: 'Referral form saved.' })
+    onChanged()
+    setBusy(false)
+  }
+
   return (
     <>
       <div style={{ marginBottom: 10 }}>
@@ -706,11 +720,17 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
             <Meta k="Case Manager" v={c.case_manager_name} />
             <Meta k="Referral Source" v={c.referral_source} />
           </div>
-          {c.referral_file_path && (
-            <div className="alert alert-info" style={{ marginTop: 14, marginBottom: 0 }}>
-              📎 <span>Original referral form: <span className="tbl-link" onClick={viewReferral}>{c.referral_file_name || 'View'}</span> — open it to proofread the details above.</span>
-            </div>
-          )}
+          <div className="alert alert-info" style={{ marginTop: 14, marginBottom: 0, alignItems: 'center', flexWrap: 'wrap' }}>
+            📎 <span style={{ flex: 1, minWidth: 200 }}>
+              {c.referral_file_path
+                ? <>Original referral form: <span className="tbl-link" onClick={viewReferral}>{c.referral_file_name || 'View'}</span> — open it to proofread the details above.</>
+                : <>No referral form on file for this case.</>}
+            </span>
+            <label className="btn btn-secondary btn-sm" style={{ cursor: 'pointer', margin: 0 }}>
+              {busy ? 'Uploading…' : (c.referral_file_path ? '↻ Replace' : '⬆ Upload referral form')}
+              <input type="file" accept=".pdf,.doc,.docx" style={{ display: 'none' }} disabled={busy} onChange={e => uploadReferral(e.target.files[0])} />
+            </label>
+          </div>
         </div>
       )}
 
