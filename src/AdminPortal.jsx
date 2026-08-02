@@ -736,6 +736,10 @@ function ContractorList({ contractors, assignments, onChanged }) {
   const [q, setQ] = useState('')
   const [msg, setMsg] = useState(null)
   const [inviting, setInviting] = useState(null)
+  const [editing, setEditing] = useState(null)   // the contractor being edited, or null
+  const [form, setForm] = useState({})
+  const [busy, setBusy] = useState(false)
+  const setF = (k, v) => setForm(p => ({ ...p, [k]: v }))
 
   async function invite(k) {
     if (!k.email) { setMsg({ kind: 'warn', text: `${k.name} has no email on file — add one before inviting.` }); return }
@@ -745,6 +749,33 @@ function ContractorList({ contractors, assignments, onChanged }) {
     else { setMsg({ kind: 'success', text: `Invite email sent to ${k.email}. Their login links automatically when they set a password.` }); onChanged() }
     setInviting(null)
   }
+
+  function startEdit(k) {
+    setForm({
+      name: k.name || '', email: k.email || '', phone: k.phone || '', company_name: k.company_name || '',
+      field: k.field || '', language: k.language || '', language_2: k.language_2 || '', county: k.county || '',
+      address: k.address || '', zip_code: k.zip_code != null ? String(k.zip_code) : '', current_rate: k.current_rate || '',
+      w9_on_file: !!k.w9_on_file, criminal_history_done: !!k.criminal_history_done, NJDOE_submitted: k.NJDOE_submitted || '',
+    })
+    setMsg(null); setEditing(k)
+  }
+
+  async function saveEdit() {
+    if (!form.name.trim()) { setMsg({ kind: 'warn', text: 'Name is required.' }); return }
+    setBusy(true); setMsg(null)
+    const zip = String(form.zip_code || '').replace(/\D/g, '')
+    const patch = {
+      name: form.name.trim(), email: form.email || null, phone: form.phone || null, company_name: form.company_name || null,
+      field: form.field || null, language: form.language || null, language_2: form.language_2 || null, county: form.county || null,
+      address: form.address || null, zip_code: zip ? Number(zip) : null, current_rate: form.current_rate || null,
+      w9_on_file: !!form.w9_on_file, criminal_history_done: !!form.criminal_history_done, NJDOE_submitted: form.NJDOE_submitted || null,
+    }
+    const { error } = await supabase.from('Contractors').update(patch).eq('identifier', editing.identifier)
+    setBusy(false)
+    if (error) { setMsg({ kind: 'danger', text: error.message }); return }
+    setEditing(null); setMsg({ kind: 'success', text: `${patch.name} updated.` }); onChanged()
+  }
+
   const openBy = useMemo(() => {
     const m = {}
     for (const a of assignments) {
@@ -757,6 +788,55 @@ function ContractorList({ contractors, assignments, onChanged }) {
   const rows = contractors.filter(k =>
     `${k.name || ''} ${k.email || ''} ${k.field || ''} ${k.language || ''} ${k.language_2 || ''} ${k.county || ''}`.toLowerCase().includes(q.toLowerCase()))
 
+  // ── Edit form ──
+  if (editing) {
+    return (
+      <div className="card" style={{ border: '2px solid var(--accent)', maxWidth: 760 }}>
+        <div className="sec-head">
+          <h3>✏️ Edit Contractor — {editing.name}</h3>
+          <button className="btn btn-ghost btn-sm" onClick={() => setEditing(null)}>← Back to list</button>
+        </div>
+        {msg && <div className={`alert alert-${msg.kind}`}>{msg.text}</div>}
+        <div className="form-group"><label>Name *</label><input value={form.name} onChange={e => setF('name', e.target.value)} /></div>
+        <div className="form-row">
+          <div className="form-group"><label>Email</label><input type="email" value={form.email} onChange={e => setF('email', e.target.value)} /></div>
+          <div className="form-group"><label>Phone</label><input value={form.phone} onChange={e => setF('phone', e.target.value)} /></div>
+        </div>
+        <div className="form-group"><label>Company Name</label><input value={form.company_name} onChange={e => setF('company_name', e.target.value)} /></div>
+        <div className="form-row">
+          <div className="form-group"><label>Field / Specialty</label><input value={form.field} onChange={e => setF('field', e.target.value)} placeholder="e.g. Speech, Psych" /></div>
+          <div className="form-group"><label>Rate</label><input value={form.current_rate} onChange={e => setF('current_rate', e.target.value)} placeholder="e.g. $880" /></div>
+        </div>
+        <div className="form-row">
+          <div className="form-group"><label>Primary Language</label><input value={form.language} onChange={e => setF('language', e.target.value)} /></div>
+          <div className="form-group"><label>Second Language</label><input value={form.language_2} onChange={e => setF('language_2', e.target.value)} /></div>
+        </div>
+        <div className="form-group"><label>Address</label><input value={form.address} onChange={e => setF('address', e.target.value)} /></div>
+        <div className="form-row">
+          <div className="form-group"><label>County</label><input value={form.county} onChange={e => setF('county', e.target.value)} /></div>
+          <div className="form-group"><label>Zip Code</label><input value={form.zip_code} onChange={e => setF('zip_code', e.target.value)} /></div>
+        </div>
+        <div className="form-group"><label>NJDOE Submitted Date</label><input type="date" value={form.NJDOE_submitted} onChange={e => setF('NJDOE_submitted', e.target.value)} /></div>
+        <div className="form-group">
+          <label>Compliance</label>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 18, marginTop: 4 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, textTransform: 'none', letterSpacing: 0, fontWeight: 400, cursor: 'pointer' }}>
+              <input type="checkbox" checked={form.w9_on_file} onChange={e => setF('w9_on_file', e.target.checked)} /> W-9 on file
+            </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, textTransform: 'none', letterSpacing: 0, fontWeight: 400, cursor: 'pointer' }}>
+              <input type="checkbox" checked={form.criminal_history_done} onChange={e => setF('criminal_history_done', e.target.checked)} /> Criminal history check done
+            </label>
+          </div>
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <button className="btn btn-primary" disabled={busy} onClick={saveEdit}>{busy ? 'Saving…' : 'Save Changes'}</button>
+          <button className="btn btn-ghost" disabled={busy} onClick={() => setEditing(null)}>Cancel</button>
+        </div>
+      </div>
+    )
+  }
+
+  // ── List ──
   return (
     <div className="card">
       <div className="sec-head">
@@ -768,7 +848,7 @@ function ContractorList({ contractors, assignments, onChanged }) {
       {msg && <div className={`alert alert-${msg.kind}`}>{msg.text}</div>}
       <div className="tbl-wrap">
         <table>
-          <thead><tr><th>Name</th><th>Field</th><th>Languages</th><th>County</th><th>Rate</th><th>W-9</th><th>Open Cases</th><th>Portal Login</th></tr></thead>
+          <thead><tr><th>Name</th><th>Field</th><th>Languages</th><th>County</th><th>Rate</th><th>W-9</th><th>Open Cases</th><th>Portal Login</th><th></th></tr></thead>
           <tbody>
             {rows.map(k => (
               <tr key={k.identifier}>
@@ -786,6 +866,7 @@ function ContractorList({ contractors, assignments, onChanged }) {
                         {inviting === k.identifier ? 'Sending…' : '✉ Invite'}
                       </button>}
                 </td>
+                <td><button className="btn btn-ghost btn-sm" onClick={() => startEdit(k)}>✏️ Edit</button></td>
               </tr>
             ))}
           </tbody>
