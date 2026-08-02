@@ -1159,6 +1159,20 @@ function ContractorList({ contractors, assignments, onChanged }) {
     setInviting(null)
   }
 
+  // Set a password directly (bypasses email links entirely — needed for AOL/Yahoo/Outlook
+  // scanners that consume one-time set-password links before the contractor can click them)
+  async function setPassword(k) {
+    if (!k.user_id) { setMsg({ kind: 'warn', text: `${k.name} has no portal login yet — send an invite first.` }); return }
+    const pw = window.prompt(`Set a temporary password for ${k.name}.\nThey'll log in at portal.learningtreenj.org with:\n  Email: ${k.email}\n  Password: (what you enter below)\n\nMinimum 6 characters:`)
+    if (pw === null) return
+    if (pw.trim().length < 6) { setMsg({ kind: 'warn', text: 'Password must be at least 6 characters.' }); return }
+    setInviting(k.identifier); setMsg(null)
+    const { data, error } = await supabase.functions.invoke('set-contractor-password', { body: { user_id: k.user_id, password: pw.trim() } })
+    if (error || !data?.success) setMsg({ kind: 'danger', text: `Couldn't set password for ${k.name}: ${data?.error || error?.message || 'unknown error'}` })
+    else setMsg({ kind: 'success', text: `Password set for ${k.name}. Tell them to log in at portal.learningtreenj.org with ${k.email} and the password you just entered — no email link needed.` })
+    setInviting(null)
+  }
+
   // Generate the contractor's set-up link and copy it, so the admin can share it directly (no email needed)
   async function copyLink(k) {
     if (!k.email) { setMsg({ kind: 'warn', text: `${k.name} has no email on file — add one first.` }); return }
@@ -1296,6 +1310,7 @@ function ContractorList({ contractors, assignments, onChanged }) {
                       {inviting === k.identifier ? 'Sending…' : (k.user_id ? '↻ Re-send' : '✉ Invite')}
                     </button>
                     <button className="btn btn-ghost btn-sm" title="Copy a set-up link to send them directly (no email needed)" disabled={inviting === k.identifier} onClick={() => copyLink(k)}>🔗 Copy link</button>
+                    {k.user_id && <button className="btn btn-ghost btn-sm" title="Set a temporary password directly (for inboxes whose scanners break the email link)" disabled={inviting === k.identifier} onClick={() => setPassword(k)}>🔑 Set password</button>}
                   </span>
                 </td>
                 <td><button className="btn btn-ghost btn-sm" onClick={() => startEdit(k)}>✏️ Edit</button></td>
