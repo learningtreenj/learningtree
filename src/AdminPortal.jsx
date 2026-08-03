@@ -207,7 +207,7 @@ function bytesToBase64(bytes) {
 function NewReferral({ onCreated }) {
   const empty = {
     Student_name: '', student_dob: '', grade: '', Language: '', School_district: '', County: '',
-    district_contact: '', case_manager_name: '', case_manager_email: '', parents_name: '',
+    district_contact: '', case_manager_name: '', case_manager_email: '', case_manager_phone: '', parents_name: '',
     parents_phone: '', parents_email: '', home_address: '', evaluation_type: '', testing_materials: '',
     reason_for_referral: '', Report_Due_date: '', referral_source: '',
   }
@@ -238,6 +238,7 @@ function NewReferral({ onCreated }) {
       district_contact: f.district_contact || null,
       case_manager_name: f.case_manager_name || null,
       case_manager_email: f.case_manager_email || null,
+      case_manager_phone: f.case_manager_phone || null,
       parents_name: f.parents_name || null,
       parents_phone: phoneDigits ? Number(phoneDigits) : null,
       parents_email: f.parents_email || null,
@@ -328,6 +329,7 @@ function NewReferral({ onCreated }) {
       district_contact: p.district_contact ?? prev.district_contact,
       case_manager_name: p.case_manager_name ?? prev.case_manager_name,
       case_manager_email: p.case_manager_email ?? prev.case_manager_email,
+      case_manager_phone: p.case_manager_phone ?? prev.case_manager_phone,
       parents_name: p.parents_name ?? prev.parents_name,
       parents_phone: p.parents_phone ?? prev.parents_phone,
       parents_email: p.parents_email ?? prev.parents_email,
@@ -394,6 +396,7 @@ function NewReferral({ onCreated }) {
         <div className="form-group"><label>District Contact</label><input value={f.district_contact} onChange={e => set('district_contact', e.target.value)} /></div>
         <div className="form-group"><label>Case Manager</label><input value={f.case_manager_name} onChange={e => set('case_manager_name', e.target.value)} /></div>
         <div className="form-group"><label>Case Manager Email</label><input value={f.case_manager_email} onChange={e => set('case_manager_email', e.target.value)} /></div>
+        <div className="form-group"><label>Case Manager Phone</label><input value={f.case_manager_phone} onChange={e => set('case_manager_phone', e.target.value)} /></div>
       </div>
 
       <SectionHead>Student Information</SectionHead>
@@ -730,7 +733,7 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
       case_number: c.case_number || '',
       Student_name: c.Student_name || '', student_dob: c.student_dob || '', grade: c['grade level'] || '',
       Language: c.Language || '', School_district: c.School_district || '', County: c.County || '',
-      district_contact: c.district_contact || '', case_manager_name: c.case_manager_name || '', case_manager_email: c.case_manager_email || '',
+      district_contact: c.district_contact || '', case_manager_name: c.case_manager_name || '', case_manager_email: c.case_manager_email || '', case_manager_phone: c.case_manager_phone || '',
       parents_name: c.parents_name || '', parents_phone: c.parents_phone != null ? String(c.parents_phone) : '', parents_email: c.parents_email || '',
       home_address: c.home_address || '', evaluation_type: c.evaluation_type || '', testing_materials: c.testing_materials || '',
       reason_for_referral: c.reason_for_referral || '', Report_Due_date: c.Report_Due_date || '', referral_source: c.referral_source || '',
@@ -748,7 +751,7 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
       case_number: form.case_number.trim(),
       Student_name: form.Student_name || null, student_dob: form.student_dob || null, 'grade level': form.grade || null,
       Language: form.Language || null, School_district: form.School_district || null, County: form.County || null,
-      district_contact: form.district_contact || null, case_manager_name: form.case_manager_name || null, case_manager_email: form.case_manager_email || null,
+      district_contact: form.district_contact || null, case_manager_name: form.case_manager_name || null, case_manager_email: form.case_manager_email || null, case_manager_phone: form.case_manager_phone || null,
       parents_name: form.parents_name || null, parents_phone: phone ? Number(phone) : null, parents_email: form.parents_email || null,
       home_address: form.home_address || null, evaluation_type: [...evalTypes, ...extraEvals].join(', ') || null, testing_materials: form.testing_materials || null,
       reason_for_referral: form.reason_for_referral || null, Report_Due_date: form.Report_Due_date || null, referral_source: form.referral_source || null,
@@ -932,6 +935,7 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
             <div className="form-group"><label>District Contact</label><input value={form.district_contact} onChange={e => setF('district_contact', e.target.value)} /></div>
             <div className="form-group"><label>Case Manager</label><input value={form.case_manager_name} onChange={e => setF('case_manager_name', e.target.value)} /></div>
             <div className="form-group"><label>Case Manager Email</label><input value={form.case_manager_email} onChange={e => setF('case_manager_email', e.target.value)} /></div>
+            <div className="form-group"><label>Case Manager Phone</label><input value={form.case_manager_phone} onChange={e => setF('case_manager_phone', e.target.value)} /></div>
           </div>
           <div className="form-row">
             <div className="form-group"><label>Parent / Guardian</label><input value={form.parents_name} onChange={e => setF('parents_name', e.target.value)} /></div>
@@ -980,6 +984,7 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
             <Meta k="DOB" v={c.student_dob ? fmtDate(c.student_dob) : null} />
             <Meta k="Eval Types Requested" v={c.evaluation_type} />
             <Meta k="Case Manager" v={c.case_manager_name} />
+            <Meta k="Case Mgr Phone" v={c.case_manager_phone} />
             <Meta k="Referral Source" v={c.referral_source} />
           </div>
           <div className="alert alert-info" style={{ marginTop: 14, marginBottom: 0, alignItems: 'center', flexWrap: 'wrap' }}>
