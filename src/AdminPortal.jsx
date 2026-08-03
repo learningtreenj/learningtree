@@ -5,6 +5,7 @@ import { generateInvoiceDoc, RATE_PER_EVAL } from './invoice.js'
 import { scoreContractors } from './smartAssign.js'
 import { extractTextFromFile } from './extractDocumentText.js'
 import { exportCasesToExcel } from './exportExcel.js'
+import { zipSync } from 'fflate'
 
 const EVAL_TYPES = ['Speech', 'Educational', 'Psych', 'Social', 'OT', 'PT']
 const CASE_STATUSES = ['Unassigned', 'Assigned', 'In Progress', 'Report Submitted', 'Pending Approval', 'Completed']
@@ -1542,7 +1543,9 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
   const [msg, setMsg] = useState(null)
   const [busy, setBusy] = useState(false)
   const [expanded, setExpanded] = useState({})
-  const toggle = id => setExpanded(p => ({ ...p, [id]: !p[id] }))
+  // Multi-report groups default to expanded; toggle collapses/re-opens
+  const isOpen = id => expanded[id] !== false
+  const toggle = id => setExpanded(p => ({ ...p, [id]: p[id] === false }))
   const qaBadge = (a) => {
     const s = qaByAssignment.get(a.id)?.qa_status
     return <Badge status={s === 'approved' ? 'Approved' : s === 'needs_revision' ? 'Revision' : 'Pending'} />
@@ -1587,6 +1590,48 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
     if (!a.report_url) { setMsg({ kind: 'warn', text: 'No report file on this assignment (submitted via the old portal — file is in Retool storage).' }); return }
     const { data, error } = await supabase.storage.from('reports').createSignedUrl(a.report_url, 300)
     if (!error && data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
+
+  // A case is ready to send when every submitted evaluation on it is approved
+  function caseAllApproved(caseId) {
+    const subs = assignments.filter(a => a.case_id === caseId && a.submitted_at && a.contractor_id != null)
+    return subs.length > 0 && subs.every(a => qaByAssignment.get(a.id)?.qa_status === 'approved')
+  }
+
+  // Download every report file for a case's evaluations, bundled into one .zip
+  async function consolidateReports(caseId, caseRow) {
+    setBusy(true); setMsg(null)
+    try {
+      const items = assignments.filter(a => a.case_id === caseId && a.submitted_at && a.contractor_id != null)
+      const zipFiles = {}
+      let count = 0
+      for (const a of items) {
+        const list = Array.isArray(a.report_files) && a.report_files.length
+          ? a.report_files
+          : (a.report_url ? [{ path: a.report_url, name: a.report_url.split('/').pop() }] : [])
+        for (const f of list) {
+          const { data, error } = await supabase.storage.from('reports').download(f.path)
+          if (error || !data) continue
+          const buf = new Uint8Array(await data.arrayBuffer())
+          const base = `${a.eval_type || 'Eval'} - ${a.Contractors?.name || 'Contractor'} - ${f.name || f.path.split('/').pop()}`.replace(/[\\/:*?"<>|]+/g, '_')
+          zipFiles[`${String(count + 1).padStart(2, '0')} - ${base}`] = buf
+          count++
+        }
+      }
+      if (!count) { setMsg({ kind: 'warn', text: 'No report files found to consolidate.' }); setBusy(false); return }
+      const zipped = zipSync(zipFiles, { level: 6 })
+      const blob = new Blob([zipped], { type: 'application/zip' })
+      const url = URL.createObjectURL(blob)
+      const el = document.createElement('a')
+      el.href = url
+      el.download = `${caseRow?.case_number || caseId} ${caseRow?.Student_name || ''} - reports.zip`.trim().replace(/\s+/g, ' ')
+      document.body.appendChild(el); el.click(); el.remove()
+      URL.revokeObjectURL(url)
+      setMsg({ kind: 'success', text: `Consolidated ${count} report file${count === 1 ? '' : 's'} for ${caseRow?.Student_name || 'this student'} into one zip.` })
+    } catch (e) {
+      setMsg({ kind: 'danger', text: `Consolidation failed: ${e.message}` })
+    }
+    setBusy(false)
   }
 
   async function saveReview(status) {
@@ -1696,16 +1741,20 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
                     )
                   }
                   const approved = g.items.filter(x => qaByAssignment.get(x.id)?.qa_status === 'approved').length
+                  const allApproved = caseAllApproved(g.case_id)
                   return (
                     <Fragment key={g.case_id}>
                       <tr style={{ cursor: 'pointer' }} onClick={() => toggle(g.case_id)}>
                         <td><span className="tbl-link">{g.caseRow?.case_number || g.case_id}</span></td>
                         <td>{g.caseRow?.Student_name || '—'}</td>
-                        <td><span style={{ display: 'inline-block', width: 12 }}>{expanded[g.case_id] ? '▾' : '▸'}</span>{g.items.length} evaluations</td>
+                        <td><span style={{ display: 'inline-block', width: 12 }}>{isOpen(g.case_id) ? '▾' : '▸'}</span>{g.items.length} evaluations</td>
                         <td>—</td>
-                        <td><span className={`badge-s ${approved === g.items.length ? 's-completed' : 's-pending'}`}>{approved}/{g.items.length} approved</span></td>
+                        <td style={{ whiteSpace: 'nowrap' }}>
+                          <span className={`badge-s ${approved === g.items.length ? 's-completed' : 's-pending'}`}>{approved}/{g.items.length} approved</span>
+                          {allApproved && <>{' '}<button className="btn btn-ghost btn-sm" title="Download all reports for this student as one zip" disabled={busy} onClick={e => { e.stopPropagation(); consolidateReports(g.case_id, g.caseRow) }}>📦</button></>}
+                        </td>
                       </tr>
-                      {expanded[g.case_id] && g.items.map(a => (
+                      {isOpen(g.case_id) && g.items.map(a => (
                         <tr key={a.id} onClick={() => openReview(a)} style={{ cursor: 'pointer', background: selectedId === a.id ? 'var(--accent-light)' : '#f8fafc' }}>
                           <td></td>
                           <td></td>
@@ -1759,6 +1808,15 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
                   <button className="btn btn-secondary btn-sm" onClick={downloadInvoice}>⬇ Download Invoice (.doc)</button>
                   <button className="btn btn-ghost btn-sm" disabled={busy} onClick={recordInvoice}>Record in Client Invoices</button>
                 </div>
+              </div>
+            )}
+            {caseAllApproved(selected.case_id) && (
+              <div style={{ marginTop: 14, borderTop: '1px solid #e5e7eb', paddingTop: 12 }}>
+                <div className="card-title" style={{ marginBottom: 6 }}>📦 Consolidated Reports</div>
+                <div style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>
+                  All evaluations for <strong>{selected.Cases?.Student_name}</strong> are approved — bundle every evaluator's report into one file to send out.
+                </div>
+                <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => consolidateReports(selected.case_id, selected.Cases)}>📦 Download all reports (.zip)</button>
               </div>
             )}
           </div>
