@@ -50,10 +50,23 @@ export function extractDocxText(buffer) {
     }
   )
 
+  // Some referral forms mark a selection by HIGHLIGHTING text (yellow highlighter) instead of
+  // checking a box. Detect runs whose run-properties carry a text highlight and wrap their
+  // text in ⟦HL⟧…⟦/HL⟧ markers so the AI parser can treat highlighted items as selected.
+  xml = xml.replace(/<w:r\b[^>]*>[\s\S]*?<\/w:r>/g, (run) => {
+    const rprMatch = run.match(/<w:rPr\b[^>]*>[\s\S]*?<\/w:rPr>/)
+    const rpr = rprMatch ? rprMatch[0] : ''
+    const highlighted = /<w:highlight\b[^>]*\bw:val="(?!none)[^"]+"/i.test(rpr)
+    if (!highlighted) return run
+    return run.replace(/(<w:t\b[^>]*>)([\s\S]*?)(<\/w:t>)/g, (mm, o, t, c) => t.trim() ? `${o}⟦HL⟧${t}⟦/HL⟧${c}` : mm)
+  })
+
   return xml
     .replace(/<w:br[^/]*/g, '\n')
     .replace(/<\/w:p>/g, '\n')
     .replace(/<[^>]+>/g, '')
+    .replace(/⟦HL⟧\s*⟦\/HL⟧/g, '')       // drop empty markers
+    .replace(/⟦\/HL⟧(\s*)⟦HL⟧/g, '$1')   // merge adjacent highlighted runs
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
