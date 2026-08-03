@@ -726,6 +726,7 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
     setEvalTypes(EVAL_TYPES.filter(et => tokens.some(t => t.toLowerCase() === et.toLowerCase())))
     setExtraEvals(tokens.filter(t => !isStd(t)))
     setForm({
+      case_number: c.case_number || '',
       Student_name: c.Student_name || '', student_dob: c.student_dob || '', grade: c['grade level'] || '',
       Language: c.Language || '', School_district: c.School_district || '', County: c.County || '',
       district_contact: c.district_contact || '', case_manager_name: c.case_manager_name || '', case_manager_email: c.case_manager_email || '',
@@ -739,9 +740,11 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
 
   async function saveEdit() {
     if (!form.Student_name || !form.School_district) { setMsg({ kind: 'warn', text: 'Student name and district are required.' }); return }
+    if (!(form.case_number || '').trim()) { setMsg({ kind: 'warn', text: 'Case # is required.' }); return }
     setBusy(true); setMsg(null)
     const phone = (form.parents_phone || '').replace(/\D/g, '')
     const patch = {
+      case_number: form.case_number.trim(),
       Student_name: form.Student_name || null, student_dob: form.student_dob || null, 'grade level': form.grade || null,
       Language: form.Language || null, School_district: form.School_district || null, County: form.County || null,
       district_contact: form.district_contact || null, case_manager_name: form.case_manager_name || null, case_manager_email: form.case_manager_email || null,
@@ -900,7 +903,8 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
               <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => { setEditing(false); setMsg(null) }}>Cancel</button>
             </div>
           </div>
-          <div className="form-row">
+          <div className="form-row-3">
+            <div className="form-group"><label>Case # *</label><input value={form.case_number} onChange={e => setF('case_number', e.target.value)} /></div>
             <div className="form-group"><label>Student Name *</label><input value={form.Student_name} onChange={e => setF('Student_name', e.target.value)} /></div>
             <div className="form-group"><label>Status</label>
               <select value={form.Status} onChange={e => setF('Status', e.target.value)}>
