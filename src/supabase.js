@@ -51,6 +51,7 @@ export function parseRate(rate) {
 
 export function statusClass(status) {
   const s = (status || '').toLowerCase()
+  if (s.includes('progress')) return 's-drafting'   // "In Progress" → purple
   if (s.includes('submit')) return 's-submitted'
   if (s.includes('draft')) return 's-drafting'
   if (s.includes('testing complet') || s.includes('complete')) return 's-completed'

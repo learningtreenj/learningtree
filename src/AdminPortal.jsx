@@ -35,7 +35,7 @@ function evalTypeStatus(a, completedSet) {
   if (acc === 'pending') return { label: 'Pending Approval', cls: 's-scheduled' }  // assigned, awaiting the evaluator's acceptance
   const s = (a.status || '').toLowerCase()
   if (s === 'submitted') return { label: 'Under Review', cls: 's-drafting' }        // accepted + report submitted, awaiting admin QA
-  return { label: 'In Progress', cls: 's-assigned' }                                 // accepted, working on it
+  return { label: 'In Progress', cls: 's-drafting' }                                 // accepted, working on it (purple)
 }
 
 // Build one expanded sub-row per requested eval type: matched assignment (evaluator + status) or Unassigned
