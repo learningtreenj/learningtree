@@ -392,9 +392,11 @@ function NewReferral({ onCreated }) {
         <div className="form-group"><label>District Name *</label><input value={f.School_district} onChange={e => set('School_district', e.target.value)} /></div>
         <div className="form-group"><label>County</label><input value={f.County} onChange={e => set('County', e.target.value)} /></div>
       </div>
-      <div className="form-row-3">
+      <div className="form-row">
         <div className="form-group"><label>District Contact</label><input value={f.district_contact} onChange={e => set('district_contact', e.target.value)} /></div>
         <div className="form-group"><label>Case Manager</label><input value={f.case_manager_name} onChange={e => set('case_manager_name', e.target.value)} /></div>
+      </div>
+      <div className="form-row">
         <div className="form-group"><label>Case Manager Email</label><input value={f.case_manager_email} onChange={e => set('case_manager_email', e.target.value)} /></div>
         <div className="form-group"><label>Case Manager Phone</label><input value={f.case_manager_phone} onChange={e => set('case_manager_phone', e.target.value)} /></div>
       </div>
