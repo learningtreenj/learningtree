@@ -2,6 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { supabase, STATUSES, fmtDate, daysLeft, dueColor } from './supabase.js'
 import { Shell, Badge, StatCard, Meta } from './ui.jsx'
 
+// Once a case is assigned to a contractor, show its initial "Assigned" stage as "In Progress"
+const showStatus = (s) => (s || '').toLowerCase() === 'assigned' ? 'In Progress' : s
+
 export default function ContractorPortal({ contractor }) {
   const [screen, setScreen] = useState('assignments')
   const [assignments, setAssignments] = useState([])
@@ -124,7 +127,7 @@ function AssignmentList({ assignments, loading, dueSoonCount, onOpen }) {
                   <td style={dueColor(a.report_due_date)}>{fmtDate(a.report_due_date)}</td>
                   <td>{a.testing_date ? fmtDate(a.testing_date) : <span style={{ color: 'var(--red)' }}>Not Set</span>}</td>
                   <td>
-                    <Badge status={a.status} />
+                    <Badge status={showStatus(a.status)} />
                     {a.acceptance_status === 'pending' && <div><span className="badge-s s-scheduled" style={{ marginTop: 3 }}>⚠ Respond</span></div>}
                     {a.acceptance_status === 'declined' && <div><span className="badge-s s-overdue" style={{ marginTop: 3 }}>Declined</span></div>}
                   </td>
@@ -207,6 +210,8 @@ function AssignmentDetail({ assignment, contractor, onBack }) {
     else {
       setReportFiles(merged); setReportUrl(merged[merged.length - 1].path); setStatus('Submitted')
       setMsg({ kind: 'success', text: `${uploaded.length} file${uploaded.length === 1 ? '' : 's'} uploaded and marked as Submitted. Thank you!` })
+      // Notify the office that a report is ready for review (non-blocking)
+      try { await supabase.functions.invoke('notify-report-submitted', { body: { assignment_id: a.id } }) } catch { /* best-effort */ }
     }
     setBusy(false)
   }
@@ -238,7 +243,7 @@ function AssignmentDetail({ assignment, contractor, onBack }) {
               {c.Language || ''} · Due: <strong style={dueColor(a.report_due_date)}>{fmtDate(a.report_due_date)}</strong>
             </div>
           </div>
-          <Badge status={status} />
+          <Badge status={showStatus(status)} />
         </div>
       </div>
 
@@ -324,7 +329,7 @@ function AssignmentDetail({ assignment, contractor, onBack }) {
             <div className="form-group">
               <label>Current Status</label>
               <select value={status} onChange={e => setStatus(e.target.value)}>
-                {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
+                {STATUSES.map(s => <option key={s} value={s}>{showStatus(s)}</option>)}
                 {!STATUSES.some(s => s.toLowerCase() === (status || '').toLowerCase()) && <option value={status}>{status}</option>}
               </select>
             </div>
@@ -337,7 +342,7 @@ function AssignmentDetail({ assignment, contractor, onBack }) {
               <textarea placeholder="Scheduling notes, parent contact attempts, etc." value={notes} onChange={e => setNotes(e.target.value)} />
             </div>
             <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => save()}>💾 Save</button>
-            <div style={{ marginTop: 8, fontSize: 11, color: '#888' }}>Progress: step {stepIndex + 1} of {STATUSES.length} ({STATUSES[stepIndex]})</div>
+            <div style={{ marginTop: 8, fontSize: 11, color: '#888' }}>Progress: step {stepIndex + 1} of {STATUSES.length} ({showStatus(STATUSES[stepIndex])})</div>
           </div>
 
           <div className="card">

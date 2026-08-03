@@ -7,7 +7,7 @@ import { extractTextFromFile } from './extractDocumentText.js'
 import { exportCasesToExcel } from './exportExcel.js'
 
 const EVAL_TYPES = ['Speech', 'Educational', 'Psych', 'Social', 'OT', 'PT']
-const CASE_STATUSES = ['Unassigned', 'Assigned', 'In Progress', 'Pending Approval', 'Completed']
+const CASE_STATUSES = ['Unassigned', 'Assigned', 'In Progress', 'Report Submitted', 'Pending Approval', 'Completed']
 const GRADES = ['Pre-K', 'K', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12']
 
 // Canonical picklists for the contractor editor
@@ -35,7 +35,7 @@ function evalTypeStatus(a, completedSet) {
   if (acc === 'pending') return { label: 'Pending Approval', cls: 's-scheduled' }  // assigned, awaiting the evaluator's acceptance
   const s = (a.status || '').toLowerCase()
   if (s === 'submitted') return { label: 'Under Review', cls: 's-drafting' }        // accepted + report submitted, awaiting admin QA
-  return { label: 'Assigned', cls: 's-assigned' }                                    // accepted, in progress
+  return { label: 'In Progress', cls: 's-assigned' }                                 // accepted, working on it
 }
 
 // Build one expanded sub-row per requested eval type: matched assignment (evaluator + status) or Unassigned
@@ -535,9 +535,11 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
 
   let rows = cases.filter(c => {
     const asg = byCase[c.id] || []
-    const allDone = asg.length > 0 && asg.every(a => (a.status || '').toLowerCase() === 'submitted')
-    if (chip === 'active' && allDone) return false
-    if (chip === 'completed' && !allDone) return false
+    // "Done" = every evaluation approved (not merely submitted) — so a case with a
+    // submitted-but-unapproved report stays in Active until it's approved/sent.
+    const done = caseFullyComplete(c, asg, completedSet)
+    if (chip === 'active' && done) return false
+    if (chip === 'completed' && !done) return false
     if (chip === 'due') {
       const soon = asg.some(a => { const n = daysLeft(a.report_due_date); return n !== null && n <= 7 && (a.status || '').toLowerCase() !== 'submitted' })
       const caseSoon = (() => { const n = daysLeft(c.Report_Due_date); return n !== null && n <= 7 })()
