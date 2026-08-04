@@ -193,17 +193,18 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
         <div className="card-title">Upcoming Due Dates</div>
         <div className="tbl-wrap">
           <table>
-            <thead><tr><th>Student</th><th>Evaluation</th><th>Contractor</th><th>Due Date</th><th>Days Left</th><th>Status</th></tr></thead>
+            <thead><tr><th>Case #</th><th>Student</th><th>Evaluation</th><th>Contractor</th><th>Due Date</th><th>Days Left</th><th>Status</th></tr></thead>
             <tbody>
-              {loading && <tr><td colSpan={6} style={{ color: '#888' }}>Loading…</td></tr>}
-              {!loading && studentGroups.length === 0 && <tr><td colSpan={6} style={{ color: '#888' }}>No open assignments.</td></tr>}
+              {loading && <tr><td colSpan={7} style={{ color: '#888' }}>Loading…</td></tr>}
+              {!loading && studentGroups.length === 0 && <tr><td colSpan={7} style={{ color: '#888' }}>No open assignments.</td></tr>}
               {studentGroups.slice(0, 15).map(g => {
                 if (g.items.length === 1) {
                   const a = g.items[0]
                   return (
                     <tr key={g.name}>
+                      <td><span className="tbl-link" onClick={() => openCaseById(a.case_id)}>{a.Cases?.case_number || a.case_id}</span></td>
                       <td style={{ fontWeight: 600 }}>{g.name}</td>
-                      <td><span className="tbl-link" onClick={() => openCaseById(a.case_id)}>{a.Cases?.case_number || a.case_id} · {a.eval_type || '—'}</span></td>
+                      <td>{a.eval_type || '—'}</td>
                       <td>{a.Contractors?.name || <span className="badge-s s-unassigned">Unassigned</span>}</td>
                       <td style={dueColor(a.report_due_date)}>{fmtDate(a.report_due_date)}</td>
                       <td style={dueColor(a.report_due_date)}>{daysLeft(a.report_due_date) ?? '—'}</td>
@@ -212,9 +213,11 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
                   )
                 }
                 const nearest = g.items[0]
+                const sameCase = g.items.every(x => x.case_id === g.items[0].case_id) ? g.items[0] : null
                 return (
                   <Fragment key={g.name}>
                     <tr style={{ cursor: 'pointer' }} onClick={() => toggle(g.name)}>
+                      <td>{sameCase ? <span className="tbl-link" onClick={e => { e.stopPropagation(); openCaseById(sameCase.case_id) }}>{sameCase.Cases?.case_number || sameCase.case_id}</span> : '—'}</td>
                       <td style={{ fontWeight: 600 }}>{g.name}</td>
                       <td><span className="tbl-link"><span style={{ display: 'inline-block', width: 12 }}>{expanded[g.name] ? '▾' : '▸'}</span>{g.items.length} evaluations</span></td>
                       <td>—</td>
@@ -224,6 +227,7 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
                     </tr>
                     {expanded[g.name] && g.items.map(a => (
                       <tr key={a.id} style={{ background: '#f8fafc' }}>
+                        <td></td>
                         <td></td>
                         <td style={{ paddingLeft: 24 }}><span className="tbl-link" onClick={() => openCaseById(a.case_id)}>↳ {a.Cases?.case_number || a.case_id} · {a.eval_type || '—'}</span></td>
                         <td>{a.Contractors?.name || <span className="badge-s s-unassigned">Unassigned</span>}</td>
