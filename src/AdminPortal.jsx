@@ -490,6 +490,19 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
     if (error) { setRowMsg({ kind: 'danger', text: error.message }); setRowBusy(false); return }
     setConfirmRemoveId(null); setRowMsg({ kind: 'success', text: 'Assignment removed.' }); onChanged && onChanged(); setRowBusy(false)
   }
+
+  // Remove an unassigned/mistaken evaluation type from the case's requested list
+  async function removeEvalType(c, evalType) {
+    if (!window.confirm(`Remove "${evalType}" from the requested evaluations on ${c.case_number || c.id}?`)) return
+    setRowBusy(true); setRowMsg(null)
+    const remaining = (c.evaluation_type || '').split(',').map(t => t.trim()).filter(Boolean)
+      .filter(t => t.toLowerCase() !== evalType.toLowerCase())
+    const { error } = await supabase.from('Cases').update({ evaluation_type: remaining.join(', ') || null }).eq('id', c.id)
+    if (error) setRowMsg({ kind: 'danger', text: error.message })
+    else setRowMsg({ kind: 'success', text: `Removed "${evalType}" from ${c.case_number || c.id}.` })
+    onChanged && onChanged(); setRowBusy(false)
+  }
+
   const byCase = useMemo(() => {
     const m = {}
     for (const a of assignments) { m[a.case_id] = m[a.case_id] || []; m[a.case_id].push(a) }
@@ -659,6 +672,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
                             {' '}<button className="btn btn-ghost btn-sm" title="Reassign to a different contractor" disabled={rowBusy} onClick={() => startReassign(r.a)}>✏️</button>
                             {' '}<button className="btn btn-danger-outline btn-sm" title="Remove this assignment" disabled={rowBusy} onClick={() => { setConfirmRemoveId(r.a.id); setReassignId(null); setRowMsg(null) }}>🗑</button>
                           </>}
+                          {!r.a && <>{' '}<button className="btn btn-danger-outline btn-sm" title="Remove this evaluation type from the case" disabled={rowBusy} onClick={() => removeEvalType(c, r.evalType)}>🗑</button></>}
                         </td>
                         <td><span className={`badge-s ${r.status.cls}`}>{r.status.label}</span></td>
                       </tr>
