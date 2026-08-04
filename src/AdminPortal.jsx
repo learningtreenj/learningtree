@@ -160,6 +160,26 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
   const awaiting = openAssignments.filter(a => /testing complet|draft/i.test(a.status || '')).length
   const overdue = openAssignments.filter(a => { const n = daysLeft(a.report_due_date); return n !== null && n < 0 })
 
+  const [expanded, setExpanded] = useState({})
+  const toggle = name => setExpanded(p => ({ ...p, [name]: !p[name] }))
+  const dispStatus = s => (s || '').toLowerCase() === 'assigned' ? 'In Progress' : s
+  const openCaseById = id => { const c = cases.find(x => x.id === id); if (c) onOpenCase(c) }
+
+  // One row per unique student; students with multiple open evaluations expand to show each
+  const studentGroups = useMemo(() => {
+    const out = []
+    const idx = new Map()
+    for (const a of openAssignments) {
+      const name = a.Cases?.Student_name || '(Unknown student)'
+      let g = idx.get(name)
+      if (!g) { g = { name, items: [] }; idx.set(name, g); out.push(g) }
+      g.items.push(a)
+    }
+    for (const g of out) g.items.sort((x, y) => (x.report_due_date || '9999').localeCompare(y.report_due_date || '9999'))
+    out.sort((a, b) => (a.items[0]?.report_due_date || '9999').localeCompare(b.items[0]?.report_due_date || '9999'))
+    return out
+  }, [openAssignments])
+
   return (
     <>
       {overdue.length > 0 && <div className="alert alert-danger">⚠️ <span><strong>{overdue.length} assignment{overdue.length > 1 ? 's are' : ' is'} past due.</strong> Check the Due Date Monitor.</span></div>}
@@ -173,21 +193,48 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
         <div className="card-title">Upcoming Due Dates</div>
         <div className="tbl-wrap">
           <table>
-            <thead><tr><th>Case</th><th>Student</th><th>Eval Type</th><th>Contractor</th><th>Accepted?</th><th>Due Date</th><th>Days Left</th><th>Status</th></tr></thead>
+            <thead><tr><th>Student</th><th>Evaluation</th><th>Contractor</th><th>Due Date</th><th>Days Left</th><th>Status</th></tr></thead>
             <tbody>
-              {loading && <tr><td colSpan={8} style={{ color: '#888' }}>Loading…</td></tr>}
-              {openAssignments.slice(0, 12).map(a => (
-                <tr key={a.id}>
-                  <td><span className="tbl-link" onClick={() => { const c = cases.find(x => x.id === a.case_id); if (c) onOpenCase(c) }}>{a.Cases?.case_number || a.case_id}</span></td>
-                  <td>{a.Cases?.Student_name || '—'}</td>
-                  <td>{a.eval_type || '—'}</td>
-                  <td>{a.Contractors?.name || <span className="badge-s s-unassigned">Unassigned</span>}</td>
-                  <td>{a.Contractors?.name ? <AcceptBadge status={a.acceptance_status} /> : '—'}</td>
-                  <td style={dueColor(a.report_due_date)}>{fmtDate(a.report_due_date)}</td>
-                  <td style={dueColor(a.report_due_date)}>{daysLeft(a.report_due_date) ?? '—'}</td>
-                  <td><Badge status={a.status} /></td>
-                </tr>
-              ))}
+              {loading && <tr><td colSpan={6} style={{ color: '#888' }}>Loading…</td></tr>}
+              {!loading && studentGroups.length === 0 && <tr><td colSpan={6} style={{ color: '#888' }}>No open assignments.</td></tr>}
+              {studentGroups.slice(0, 15).map(g => {
+                if (g.items.length === 1) {
+                  const a = g.items[0]
+                  return (
+                    <tr key={g.name}>
+                      <td style={{ fontWeight: 600 }}>{g.name}</td>
+                      <td><span className="tbl-link" onClick={() => openCaseById(a.case_id)}>{a.Cases?.case_number || a.case_id} · {a.eval_type || '—'}</span></td>
+                      <td>{a.Contractors?.name || <span className="badge-s s-unassigned">Unassigned</span>}</td>
+                      <td style={dueColor(a.report_due_date)}>{fmtDate(a.report_due_date)}</td>
+                      <td style={dueColor(a.report_due_date)}>{daysLeft(a.report_due_date) ?? '—'}</td>
+                      <td><Badge status={dispStatus(a.status)} /></td>
+                    </tr>
+                  )
+                }
+                const nearest = g.items[0]
+                return (
+                  <Fragment key={g.name}>
+                    <tr style={{ cursor: 'pointer' }} onClick={() => toggle(g.name)}>
+                      <td style={{ fontWeight: 600 }}>{g.name}</td>
+                      <td><span className="tbl-link"><span style={{ display: 'inline-block', width: 12 }}>{expanded[g.name] ? '▾' : '▸'}</span>{g.items.length} evaluations</span></td>
+                      <td>—</td>
+                      <td style={dueColor(nearest.report_due_date)}>{fmtDate(nearest.report_due_date)}</td>
+                      <td style={dueColor(nearest.report_due_date)}>{daysLeft(nearest.report_due_date) ?? '—'}</td>
+                      <td>—</td>
+                    </tr>
+                    {expanded[g.name] && g.items.map(a => (
+                      <tr key={a.id} style={{ background: '#f8fafc' }}>
+                        <td></td>
+                        <td style={{ paddingLeft: 24 }}><span className="tbl-link" onClick={() => openCaseById(a.case_id)}>↳ {a.Cases?.case_number || a.case_id} · {a.eval_type || '—'}</span></td>
+                        <td>{a.Contractors?.name || <span className="badge-s s-unassigned">Unassigned</span>}</td>
+                        <td style={dueColor(a.report_due_date)}>{fmtDate(a.report_due_date)}</td>
+                        <td style={dueColor(a.report_due_date)}>{daysLeft(a.report_due_date) ?? '—'}</td>
+                        <td><Badge status={dispStatus(a.status)} /></td>
+                      </tr>
+                    ))}
+                  </Fragment>
+                )
+              })}
             </tbody>
           </table>
         </div>
