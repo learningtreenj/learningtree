@@ -455,7 +455,7 @@ function NewReferral({ onCreated }) {
 
 function CaseList({ cases, assignments, contractors = [], earnings = [], loading, onOpen, onChanged }) {
   const [q, setQ] = useState('')
-  const [chip, setChip] = useState('active')
+  const [chip, setChip] = useState('all')
   const [expanded, setExpanded] = useState({})
   const toggle = id => setExpanded(p => ({ ...p, [id]: !p[id] }))
   const [reassignId, setReassignId] = useState(null)
@@ -636,7 +636,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
               const prematureComplete = !complete && (c.Status || '').toLowerCase() === 'completed'
               return (
                 <Fragment key={c.id}>
-                  <tr>
+                  <tr style={complete ? { background: 'var(--gray-bg)', color: 'var(--muted)' } : undefined} title={complete ? 'Completed case' : undefined}>
                     <td><span className="tbl-link" onClick={() => onOpen(c)}>{c.case_number || c.id}</span></td>
                     <td>{c.Student_name || '—'}</td>
                     <td>{c.School_district || '—'}</td>
