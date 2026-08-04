@@ -515,6 +515,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
   const [sortCol, setSortCol] = useState(null)
   const [sortDir, setSortDir] = useState('asc')
   const [colFilters, setColFilters] = useState({})
+  const [colChecks, setColChecks] = useState({})
   const [openMenu, setOpenMenu] = useState(null)
   useEffect(() => {
     if (!openMenu) return
@@ -527,6 +528,20 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
     ['case_number', 'Case #'], ['Student_name', 'Student'], ['School_district', 'District'],
     ['evaluation_type', 'Eval Types'], ['Report_Due_date', 'Due Date'], ['assignments', 'Assignments'], ['status', 'Status'],
   ]
+  // District + Eval Types filter by multi-select checkboxes of the distinct values in the data
+  const CHECKBOX_COLS = { School_district: true, evaluation_type: true }
+  const districtOptions = useMemo(() => [...new Set(cases.map(c => (c.School_district || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [cases])
+  const evalOptions = useMemo(() => {
+    const s = new Set()
+    for (const c of cases) for (const t of (c.evaluation_type || '').split(',').map(x => x.trim()).filter(Boolean)) s.add(t)
+    return [...s].sort((a, b) => a.localeCompare(b))
+  }, [cases])
+  const optionsFor = key => key === 'School_district' ? districtOptions : evalOptions
+  const toggleCheck = (key, val) => setColChecks(p => {
+    const cur = new Set(p[key] || [])
+    cur.has(val) ? cur.delete(val) : cur.add(val)
+    return { ...p, [key]: [...cur] }
+  })
   function statusLabel(c, asg) {
     if (caseFullyComplete(c, asg, completedSet)) return 'Completed'
     if ((c.Status || '').toLowerCase() === 'completed') return 'In Progress'
@@ -568,9 +583,17 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
     return hay.includes(q.toLowerCase())
   })
   for (const [key, text] of Object.entries(colFilters)) {
+    if (CHECKBOX_COLS[key]) continue
     const t = (text || '').trim().toLowerCase()
     if (t) rows = rows.filter(c => colFilterVal(key, c).includes(t))
   }
+  const distSel = colChecks.School_district || []
+  if (distSel.length) rows = rows.filter(c => distSel.includes((c.School_district || '').trim()))
+  const evalSel = colChecks.evaluation_type || []
+  if (evalSel.length) rows = rows.filter(c => {
+    const toks = (c.evaluation_type || '').split(',').map(t => t.trim())
+    return evalSel.some(v => toks.includes(v))
+  })
   if (sortCol) {
     rows = [...rows].sort((a, b) => {
       const va = colSortVal(sortCol, a), vb = colSortVal(sortCol, b)
@@ -603,21 +626,32 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
               <th key={key} style={{ position: 'relative', whiteSpace: 'nowrap' }}>
                 <span style={{ cursor: 'pointer', userSelect: 'none' }}
                   onClick={e => { e.stopPropagation(); setOpenMenu(openMenu === key ? null : key) }}>
-                  {label}{sortCol === key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}{colFilters[key]?.trim() ? ' •' : ''} <span style={{ color: 'var(--muted)' }}>▾</span>
+                  {label}{sortCol === key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}{(colFilters[key]?.trim() || (colChecks[key] || []).length) ? ' •' : ''} <span style={{ color: 'var(--muted)' }}>▾</span>
                 </span>
                 {openMenu === key && (
                   <div onClick={e => e.stopPropagation()}
-                    style={{ position: 'absolute', top: '100%', left: 0, zIndex: 20, background: '#fff', border: '1px solid var(--border)', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.18)', padding: 8, minWidth: 190, textAlign: 'left', textTransform: 'none', letterSpacing: 0, fontWeight: 400 }}>
+                    style={{ position: 'absolute', top: '100%', left: 0, zIndex: 20, background: '#fff', border: '1px solid var(--border)', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.18)', padding: 8, minWidth: 200, textAlign: 'left', textTransform: 'none', letterSpacing: 0, fontWeight: 400 }}>
                     <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
                       <button className="btn btn-ghost btn-sm" onClick={() => { setSortCol(key); setSortDir('asc') }}>↑ Ascending</button>
                       <button className="btn btn-ghost btn-sm" onClick={() => { setSortCol(key); setSortDir('desc') }}>↓ Descending</button>
                     </div>
-                    <input type="text" autoFocus placeholder="Filter text…" value={colFilters[key] || ''}
-                      onChange={e => setColFilters(p => ({ ...p, [key]: e.target.value }))}
-                      onKeyDown={e => { if (e.key === 'Enter') setOpenMenu(null) }}
-                      style={{ width: '100%', padding: '5px 8px', fontSize: 13, border: '1px solid var(--border)', borderRadius: 5 }} />
+                    {CHECKBOX_COLS[key] ? (
+                      <div style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 5, padding: '4px 6px' }}>
+                        {optionsFor(key).length === 0 && <div style={{ fontSize: 12, color: '#888' }}>No values</div>}
+                        {optionsFor(key).map(opt => (
+                          <label key={opt} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, padding: '2px 0', cursor: 'pointer' }}>
+                            <input type="checkbox" checked={(colChecks[key] || []).includes(opt)} onChange={() => toggleCheck(key, opt)} /> {opt}
+                          </label>
+                        ))}
+                      </div>
+                    ) : (
+                      <input type="text" autoFocus placeholder="Filter text…" value={colFilters[key] || ''}
+                        onChange={e => setColFilters(p => ({ ...p, [key]: e.target.value }))}
+                        onKeyDown={e => { if (e.key === 'Enter') setOpenMenu(null) }}
+                        style={{ width: '100%', padding: '5px 8px', fontSize: 13, border: '1px solid var(--border)', borderRadius: 5 }} />
+                    )}
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6 }}>
-                      <span className="tbl-link" style={{ fontSize: 12 }} onClick={() => { setColFilters(p => ({ ...p, [key]: '' })); if (sortCol === key) setSortCol(null) }}>Clear</span>
+                      <span className="tbl-link" style={{ fontSize: 12 }} onClick={() => { setColFilters(p => ({ ...p, [key]: '' })); setColChecks(p => ({ ...p, [key]: [] })); if (sortCol === key) setSortCol(null) }}>Clear</span>
                       <span className="tbl-link" style={{ fontSize: 12 }} onClick={() => setOpenMenu(null)}>Close</span>
                     </div>
                   </div>
