@@ -1,4 +1,5 @@
 import { statusClass } from './supabase.js'
+import { LOGO_B64 } from './invoiceAssets.js'
 
 export function Badge({ status }) {
   return <span className={`badge-s ${statusClass(status)}`}>{status || '—'}</span>
@@ -33,6 +34,8 @@ export function Shell({ brand, sub, userName, userRole, navSections, active, onN
     <div className="shell">
       <div className="sidebar">
         <div className="sidebar-logo">
+          <img src={`data:image/jpeg;base64,${LOGO_B64}`} alt="Learning Tree"
+            style={{ display: 'block', width: '48px', height: 'auto', borderRadius: '6px', marginBottom: '8px' }} />
           <div className="brand">{brand}</div>
           <div className="sub">{sub}</div>
         </div>
