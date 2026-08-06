@@ -720,9 +720,14 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
               const breakdown = expanded[c.id] ? buildEvalBreakdown(c, asg, completedSet) : null
               const canExpand = asg.length > 0 || (c.evaluation_type || '').trim().length > 0
               const complete = caseFullyComplete(c, asg, completedSet)
-              const prematureComplete = !complete && (c.Status || '').toLowerCase() === 'completed'
               // Row-level status is "Pending Approval" while any assigned evaluator hasn't accepted yet
               const anyPending = asg.some(a => a.contractor_id != null && (a.acceptance_status || 'pending').toLowerCase() === 'pending')
+              // "Report Submitted" only when EVERY evaluation on the case is submitted (not partial)
+              const reqTypes = (c.evaluation_type || '').split(',').map(t => t.trim()).filter(Boolean)
+              const coveredTypes = new Set(asg.map(a => (a.eval_type || '').toLowerCase()))
+              const allSubmitted = asg.length > 0
+                && reqTypes.every(t => coveredTypes.has(t.toLowerCase()))
+                && asg.every(a => a.contractor_id != null && (a.status || '').toLowerCase() === 'submitted')
               return (
                 <Fragment key={c.id}>
                   <tr style={complete ? { background: 'var(--gray-bg)', color: 'var(--muted)' } : undefined} title={complete ? 'Completed case' : undefined}>
@@ -744,9 +749,11 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
                         ? <Badge status="Completed" />
                         : anyPending
                           ? <span className="badge-s s-scheduled">Pending Approval</span>
-                          : prematureComplete
-                            ? <span className="badge-s s-drafting">In Progress</span>
-                            : <Badge status={c.Status === 'Assigned' ? 'In Progress' : c.Status} />}
+                          : allSubmitted
+                            ? <Badge status="Report Submitted" />
+                            : asg.length === 0
+                              ? <Badge status={c.Status || 'Unassigned'} />
+                              : <span className="badge-s s-drafting">In Progress</span>}
                     </td>
                   </tr>
                   {expanded[c.id] && breakdown.map((r, i) => (
