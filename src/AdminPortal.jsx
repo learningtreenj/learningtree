@@ -138,7 +138,7 @@ export default function AdminPortal({ user }) {
       topbarExtra={<button className="btn btn-primary btn-sm" onClick={() => setScreen('referral')}>+ New Referral</button>}>
 
       {screen === 'dashboard' && <Dashboard assignments={assignments} openAssignments={openAssignments} dueThisWeek={dueThisWeek} loading={loading}
-        onOpenCase={c => { setSelectedCase(c); setScreen('casedetail') }} cases={cases} />}
+        onOpenCase={c => { setSelectedCase(c); setScreen('casedetail') }} cases={cases} earnings={earnings} />}
       {screen === 'referral' && <NewReferral onCreated={c => { load(); setSelectedCase(c); setScreen('casedetail') }} />}
       {screen === 'cases' && <CaseList cases={cases} assignments={assignments} contractors={contractors} earnings={earnings} loading={loading}
         onOpen={c => { setSelectedCase(c); setScreen('casedetail') }} onChanged={load} />}
@@ -154,7 +154,7 @@ export default function AdminPortal({ user }) {
   )
 }
 
-function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, onOpenCase }) {
+function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, onOpenCase, earnings = [] }) {
   const now = new Date().toISOString().slice(0, 7)
   const completedThisMonth = assignments.filter(a => (a.submitted_at || '').slice(0, 7) === now).length
   const awaiting = openAssignments.filter(a => /testing complet|draft/i.test(a.status || '')).length
@@ -162,7 +162,8 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
 
   const [expanded, setExpanded] = useState({})
   const toggle = name => setExpanded(p => ({ ...p, [name]: !p[name] }))
-  const dispStatus = s => (s || '').toLowerCase() === 'assigned' ? 'In Progress' : s
+  const completedSet = useMemo(() => new Set((earnings || []).map(e => e.assignment_id)), [earnings])
+  const statusBadge = (a) => { const s = evalTypeStatus(a, completedSet); return <span className={`badge-s ${s.cls}`}>{s.label}</span> }
   const openCaseById = id => { const c = cases.find(x => x.id === id); if (c) onOpenCase(c) }
 
   // One row per unique student; students with multiple open evaluations expand to show each
@@ -208,11 +209,12 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
                       <td>{a.Contractors?.name || <span className="badge-s s-unassigned">Unassigned</span>}</td>
                       <td style={dueColor(a.report_due_date)}>{fmtDate(a.report_due_date)}</td>
                       <td style={dueColor(a.report_due_date)}>{daysLeft(a.report_due_date) ?? '—'}</td>
-                      <td><Badge status={dispStatus(a.status)} /></td>
+                      <td>{statusBadge(a)}</td>
                     </tr>
                   )
                 }
                 const nearest = g.items[0]
+                const groupPending = g.items.some(a => a.contractor_id != null && (a.acceptance_status || 'pending').toLowerCase() === 'pending')
                 const sameCase = g.items.every(x => x.case_id === g.items[0].case_id) ? g.items[0] : null
                 return (
                   <Fragment key={g.name}>
@@ -223,7 +225,7 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
                       <td>—</td>
                       <td style={dueColor(nearest.report_due_date)}>{fmtDate(nearest.report_due_date)}</td>
                       <td style={dueColor(nearest.report_due_date)}>{daysLeft(nearest.report_due_date) ?? '—'}</td>
-                      <td>—</td>
+                      <td>{groupPending ? <span className="badge-s s-scheduled">Pending Approval</span> : <span className="badge-s s-drafting">In Progress</span>}</td>
                     </tr>
                     {expanded[g.name] && g.items.map(a => (
                       <tr key={a.id} style={{ background: '#f8fafc' }}>
@@ -233,7 +235,7 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
                         <td>{a.Contractors?.name || <span className="badge-s s-unassigned">Unassigned</span>}</td>
                         <td style={dueColor(a.report_due_date)}>{fmtDate(a.report_due_date)}</td>
                         <td style={dueColor(a.report_due_date)}>{daysLeft(a.report_due_date) ?? '—'}</td>
-                        <td><Badge status={dispStatus(a.status)} /></td>
+                        <td>{statusBadge(a)}</td>
                       </tr>
                     ))}
                   </Fragment>
@@ -719,6 +721,8 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
               const canExpand = asg.length > 0 || (c.evaluation_type || '').trim().length > 0
               const complete = caseFullyComplete(c, asg, completedSet)
               const prematureComplete = !complete && (c.Status || '').toLowerCase() === 'completed'
+              // Row-level status is "Pending Approval" while any assigned evaluator hasn't accepted yet
+              const anyPending = asg.some(a => a.contractor_id != null && (a.acceptance_status || 'pending').toLowerCase() === 'pending')
               return (
                 <Fragment key={c.id}>
                   <tr style={complete ? { background: 'var(--gray-bg)', color: 'var(--muted)' } : undefined} title={complete ? 'Completed case' : undefined}>
@@ -738,9 +742,11 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
                     <td>
                       {complete
                         ? <Badge status="Completed" />
-                        : prematureComplete
-                          ? <span className="badge-s s-drafting">In Progress</span>
-                          : <Badge status={c.Status} />}
+                        : anyPending
+                          ? <span className="badge-s s-scheduled">Pending Approval</span>
+                          : prematureComplete
+                            ? <span className="badge-s s-drafting">In Progress</span>
+                            : <Badge status={c.Status === 'Assigned' ? 'In Progress' : c.Status} />}
                     </td>
                   </tr>
                   {expanded[c.id] && breakdown.map((r, i) => (
