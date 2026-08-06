@@ -1656,7 +1656,7 @@ const QA_CHECKS = [
 ]
 
 function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
-  const [tab, setTab] = useState('pending')
+  const [tab, setTab] = useState('all')
   const [selectedId, setSelectedId] = useState(null)
   const [form, setForm] = useState(null)
   const [msg, setMsg] = useState(null)
@@ -1833,7 +1833,7 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
   return (
     <>
       <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-        {[['pending', `Pending Review`], ['all', 'All Submitted']].map(([id, label]) => (
+        {[['all', 'All Submitted'], ['pending', `Pending Review`]].map(([id, label]) => (
           <span key={id} className={`filter-chip ${tab === id ? 'active' : ''}`} onClick={() => { setTab(id); setSelectedId(null) }}>{label}</span>
         ))}
       </div>
