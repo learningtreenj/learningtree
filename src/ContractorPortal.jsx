@@ -179,6 +179,11 @@ function AssignmentDetail({ assignment, contractor, onBack }) {
   }
 
   async function save(extra = {}) {
+    // A case can only be marked "Submitted" once a report file has been uploaded
+    if ((status || '').toLowerCase() === 'submitted' && reportFiles.length === 0) {
+      setMsg({ kind: 'warn', text: 'Please upload your completed report before marking this Submitted — a report attachment is required.' })
+      return false
+    }
     setBusy(true); setMsg(null)
     const patch = { status, testing_date: testingDate || null, notes: notes || null, ...extra }
     const { error } = await supabase.from('Assignments').update(patch).eq('id', a.id)
