@@ -64,6 +64,29 @@ function caseFullyComplete(caseRow, asgs, completedSet) {
   return allAssigned && asgs.every(a => completedSet.has(a.id))
 }
 
+// The single source of truth for a case's row-level status label (used for display, sort, and filter)
+function caseStatusLabel(c, asg, completedSet) {
+  if (caseFullyComplete(c, asg, completedSet)) return 'Completed'
+  if (asg.some(a => a.contractor_id != null && (a.acceptance_status || 'pending').toLowerCase() === 'pending')) return 'Pending Approval'
+  const reqTypes = (c.evaluation_type || '').split(',').map(t => t.trim()).filter(Boolean)
+  const covered = new Set(asg.map(a => (a.eval_type || '').toLowerCase()))
+  const allSubmitted = asg.length > 0
+    && reqTypes.every(t => covered.has(t.toLowerCase()))
+    && asg.every(a => a.contractor_id != null && (a.status || '').toLowerCase() === 'submitted')
+  if (allSubmitted) return 'Report Submitted'
+  if (asg.length === 0) return c.Status || 'Unassigned'
+  return 'In Progress'
+}
+function caseStatusCls(label) {
+  const l = (label || '').toLowerCase()
+  if (l === 'completed') return 's-completed'
+  if (l === 'pending approval') return 's-scheduled'
+  if (l.includes('submit')) return 's-submitted'
+  if (l === 'in progress') return 's-drafting'
+  if (l === 'unassigned') return 's-unassigned'
+  return 's-assigned'
+}
+
 // Shows whether the contractor has accepted/declined an assignment
 function AcceptBadge({ status }) {
   const s = (status || 'pending').toLowerCase()
@@ -581,31 +604,31 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
     ['case_number', 'Case #'], ['Student_name', 'Student'], ['School_district', 'District'],
     ['evaluation_type', 'Eval Types'], ['Report_Due_date', 'Due Date'], ['assignments', 'Assignments'], ['status', 'Status'],
   ]
-  // District + Eval Types filter by multi-select checkboxes of the distinct values in the data
-  const CHECKBOX_COLS = { School_district: true, evaluation_type: true }
+  // District + Eval Types + Status filter by multi-select checkboxes of the distinct values
+  const CHECKBOX_COLS = { School_district: true, evaluation_type: true, status: true }
   const districtOptions = useMemo(() => [...new Set(cases.map(c => (c.School_district || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [cases])
   const evalOptions = useMemo(() => {
     const s = new Set()
     for (const c of cases) for (const t of (c.evaluation_type || '').split(',').map(x => x.trim()).filter(Boolean)) s.add(t)
     return [...s].sort((a, b) => a.localeCompare(b))
   }, [cases])
-  const optionsFor = key => key === 'School_district' ? districtOptions : evalOptions
+  const statusOptions = useMemo(() => {
+    const s = new Set()
+    for (const c of cases) s.add(caseStatusLabel(c, byCase[c.id] || [], completedSet))
+    return [...s].sort((a, b) => a.localeCompare(b))
+  }, [cases, byCase, completedSet])
+  const optionsFor = key => key === 'School_district' ? districtOptions : key === 'evaluation_type' ? evalOptions : statusOptions
   const toggleCheck = (key, val) => setColChecks(p => {
     const cur = new Set(p[key] || [])
     cur.has(val) ? cur.delete(val) : cur.add(val)
     return { ...p, [key]: [...cur] }
   })
-  function statusLabel(c, asg) {
-    if (caseFullyComplete(c, asg, completedSet)) return 'Completed'
-    if ((c.Status || '').toLowerCase() === 'completed') return 'In Progress'
-    return c.Status || ''
-  }
   function colSortVal(col, c) {
     const asg = byCase[c.id] || []
     switch (col) {
       case 'Report_Due_date': return c.Report_Due_date || ''       // ISO date sorts lexically
       case 'assignments': return asg.length                        // numeric
-      case 'status': return statusLabel(c, asg).toLowerCase()
+      case 'status': return caseStatusLabel(c, asg, completedSet).toLowerCase()
       case 'case_number': return (c.case_number || '').toLowerCase()
       case 'Student_name': return (c.Student_name || '').toLowerCase()
       case 'School_district': return (c.School_district || '').toLowerCase()
@@ -647,6 +670,8 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
     const toks = (c.evaluation_type || '').split(',').map(t => t.trim())
     return evalSel.some(v => toks.includes(v))
   })
+  const statusSel = colChecks.status || []
+  if (statusSel.length) rows = rows.filter(c => statusSel.includes(caseStatusLabel(c, byCase[c.id] || [], completedSet)))
   if (sortCol) {
     rows = [...rows].sort((a, b) => {
       const va = colSortVal(sortCol, a), vb = colSortVal(sortCol, b)
@@ -720,14 +745,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
               const breakdown = expanded[c.id] ? buildEvalBreakdown(c, asg, completedSet) : null
               const canExpand = asg.length > 0 || (c.evaluation_type || '').trim().length > 0
               const complete = caseFullyComplete(c, asg, completedSet)
-              // Row-level status is "Pending Approval" while any assigned evaluator hasn't accepted yet
-              const anyPending = asg.some(a => a.contractor_id != null && (a.acceptance_status || 'pending').toLowerCase() === 'pending')
-              // "Report Submitted" only when EVERY evaluation on the case is submitted (not partial)
-              const reqTypes = (c.evaluation_type || '').split(',').map(t => t.trim()).filter(Boolean)
-              const coveredTypes = new Set(asg.map(a => (a.eval_type || '').toLowerCase()))
-              const allSubmitted = asg.length > 0
-                && reqTypes.every(t => coveredTypes.has(t.toLowerCase()))
-                && asg.every(a => a.contractor_id != null && (a.status || '').toLowerCase() === 'submitted')
+              const statusLbl = caseStatusLabel(c, asg, completedSet)
               return (
                 <Fragment key={c.id}>
                   <tr style={complete ? { background: 'var(--gray-bg)', color: 'var(--muted)' } : undefined} title={complete ? 'Completed case' : undefined}>
@@ -744,17 +762,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
                             {asg.length === 0 ? 'Unassigned' : `${asg.filter(a => (a.status || '').toLowerCase() === 'submitted').length}/${asg.length} submitted`}
                           </span>}
                     </td>
-                    <td>
-                      {complete
-                        ? <Badge status="Completed" />
-                        : anyPending
-                          ? <span className="badge-s s-scheduled">Pending Approval</span>
-                          : allSubmitted
-                            ? <Badge status="Report Submitted" />
-                            : asg.length === 0
-                              ? <Badge status={c.Status || 'Unassigned'} />
-                              : <span className="badge-s s-drafting">In Progress</span>}
-                    </td>
+                    <td><span className={`badge-s ${caseStatusCls(statusLbl)}`}>{statusLbl}</span></td>
                   </tr>
                   {expanded[c.id] && breakdown.map((r, i) => (
                     <Fragment key={`${c.id}-e-${i}`}>
