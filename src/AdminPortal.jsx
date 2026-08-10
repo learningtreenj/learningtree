@@ -912,19 +912,21 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
 
   // Auto-fills the district invoice from the case's submitted evaluations (student, date,
   // invoice #, dates/types of service, rate by language, sum).
-  function downloadCaseInvoice() {
+  async function downloadCaseInvoice() {
     const submitted = assignments.filter(a => a.contractor_id != null && (a.status || '').toLowerCase() === 'submitted')
     const src = submitted.length ? submitted : assignments.filter(a => a.contractor_id != null)
     if (!src.length) { setMsg({ kind: 'warn', text: 'No submitted evaluations yet to invoice.' }); return }
     const items = src.map(a => ({ assignmentId: a.id, evalType: a.eval_type || '', dateOfService: a.submitted_at || a.testing_date }))
       .sort((x, y) => x.assignmentId - y.assignmentId)
-    const minId = items.reduce((m, l) => Math.min(m, l.assignmentId), items[0].assignmentId)
+    // Last 4 digits: per-district sequence (1000, 1001, ...) assigned in invoice-creation order.
+    const { data: seq, error } = await supabase.rpc('allocate_invoice_seq', { p_case_id: c.id })
+    if (error) { setMsg({ kind: 'danger', text: `Could not assign an invoice number: ${error.message}` }); return }
     generateInvoiceDoc({
       caseNumber: c.case_number || String(c.id),
       studentName: c.Student_name || '',
       districtName: c.School_district || '',
       language: c.Language || null,
-      invoiceNumber: `${c.case_number || c.id}-${String(minId).padStart(4, '0')}`,
+      invoiceNumber: `${c.case_number || c.id}-${seq}`,
       lineItems: items.map(l => ({ evalType: l.evalType, dateOfService: l.dateOfService })),
     })
   }
@@ -1889,7 +1891,7 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
     onChanged(); setBusy(false)
   }
 
-  function downloadInvoice() {
+  async function downloadInvoice() {
     if (!selected) return
     const caseAssignments = assignments.filter(x => x.case_id === selected.case_id && x.contractor_id != null)
     const approved = caseAssignments.filter(x =>
@@ -1897,13 +1899,15 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
     const items = (approved.length > 0 ? approved : caseAssignments).map(x => ({
       assignmentId: x.id, evalType: x.eval_type || '', dateOfService: x.submitted_at,
     })).sort((a, b) => a.assignmentId - b.assignmentId)
-    const minId = items.reduce((m, l) => Math.min(m, l.assignmentId), items[0]?.assignmentId ?? selected.id)
+    // Last 4 digits: per-district sequence (1000, 1001, ...) assigned in invoice-creation order.
+    const { data: seq, error } = await supabase.rpc('allocate_invoice_seq', { p_case_id: selected.case_id })
+    if (error) { setMsg({ kind: 'danger', text: `Could not assign an invoice number: ${error.message}` }); return }
     generateInvoiceDoc({
       caseNumber: selected.Cases?.case_number || String(selected.case_id),
       studentName: selected.Cases?.Student_name || '',
       districtName: selected.Cases?.School_district || '',
       language: selected.Cases?.Language || null,
-      invoiceNumber: `${selected.Cases?.case_number || selected.case_id}-${String(minId).padStart(4, '0')}`,
+      invoiceNumber: `${selected.Cases?.case_number || selected.case_id}-${seq}`,
       lineItems: items.map(l => ({ evalType: l.evalType, dateOfService: l.dateOfService })),
     })
   }
