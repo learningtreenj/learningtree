@@ -72,7 +72,7 @@ function invoiceHtml(data) {
   <td style="width:64pt;vertical-align:top"><img src="logo.jpeg" width="52" height="60" style="width:52pt;height:60pt"></td>
   <td style="vertical-align:top">
     <div style="font-weight:bold;font-size:13pt">Learning Tree Multicultural/Multilingual Evaluation and Consulting, Inc.</div>
-    <div style="text-align:center;font-size:20pt;font-weight:bold;letter-spacing:3pt;margin-top:4pt">INVOICE</div>
+    <div style="text-align:left;font-size:20pt;font-weight:bold;letter-spacing:3pt;margin-top:4pt">INVOICE</div>
   </td>
 </tr></table>
 <p>238 West End Ave.</p>
