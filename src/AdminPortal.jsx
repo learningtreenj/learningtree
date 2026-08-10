@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react'
 import { supabase, fetchAll, STATUSES, fmtDate, daysLeft, dueColor, parseRate, toISODate } from './supabase.js'
 import { Shell, Badge, StatCard, Meta } from './ui.jsx'
 import { generateInvoiceDoc, RATE_PER_EVAL } from './invoice.js'
-import { getRate } from './rates.js'
+import { getRate, invalidateRates } from './rates.js'
 import { scoreContractors } from './smartAssign.js'
 import { extractTextFromFile } from './extractDocumentText.js'
 import { exportCasesToExcel } from './exportExcel.js'
@@ -143,6 +143,7 @@ export default function AdminPortal({ user }) {
       { id: 'qa', icon: '🔍', label: 'Report Review', badge: awaitingQa.length || null },
       { id: 'invoices', icon: '🧾', label: 'Client Invoices' },
       { id: 'payroll', icon: '💰', label: 'Payroll' },
+      { id: 'rates', icon: '💵', label: 'Rate Table' },
     ]},
     { label: 'Monitoring', items: [
       { id: 'due', icon: '⏰', label: 'Due Date Monitor' },
@@ -150,7 +151,7 @@ export default function AdminPortal({ user }) {
     ]},
   ]
 
-  const titles = { dashboard: 'Dashboard', referral: 'New Referral Intake', cases: 'Cases', casedetail: 'Case Detail', contractors: 'Contractors', qa: 'Report Review & QA', invoices: 'Client Invoices', payroll: 'Payroll & Payment Batches', due: 'Due Date Monitor', emaillog: 'Email Log' }
+  const titles = { dashboard: 'Dashboard', referral: 'New Referral Intake', cases: 'Cases', casedetail: 'Case Detail', contractors: 'Contractors', qa: 'Report Review & QA', invoices: 'Client Invoices', payroll: 'Payroll & Payment Batches', rates: 'Language Rate Table', due: 'Due Date Monitor', emaillog: 'Email Log' }
 
   return (
     <Shell brand="BEval Portal" sub="Admin / Coordinator"
@@ -172,9 +173,119 @@ export default function AdminPortal({ user }) {
       {screen === 'qa' && <QaQueue assignments={assignments} qaByAssignment={qaByAssignment} earnings={earnings} onChanged={load} />}
       {screen === 'invoices' && <InvoiceList invoices={invoices} cases={cases} onChanged={load} />}
       {screen === 'payroll' && <Payroll assignments={assignments} earnings={earnings} batches={batches} contractors={contractors} onChanged={load} />}
+      {screen === 'rates' && <RateTable />}
       {screen === 'due' && <DueMonitor assignments={openAssignments} onOpenCase={id => { const c = cases.find(x => x.id === id); if (c) { setSelectedCase(c); setScreen('casedetail') } }} />}
       {screen === 'emaillog' && <EmailLog emailLog={emailLog} assignments={assignments} onChanged={load} />}
     </Shell>
+  )
+}
+
+// Editable per-language rate table (backs the invoice rate lookup). Reads/writes the
+// Supabase `languages-pay-rates` table (columns LANGUAGE, Rate).
+function RateTable() {
+  const [rows, setRows] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState(null)
+  const [edits, setEdits] = useState({})
+  const [newLang, setNewLang] = useState('')
+  const [newRate, setNewRate] = useState('')
+
+  async function load() {
+    setLoading(true)
+    const { data, error } = await supabase.from('languages-pay-rates').select('*').order('LANGUAGE')
+    if (error) setMsg({ kind: 'danger', text: error.message })
+    setRows(data || [])
+    setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  async function saveRate(lang) {
+    const val = Math.round(Number(edits[lang]))
+    if (!Number.isFinite(val) || val < 0) { setMsg({ kind: 'warn', text: 'Enter a valid rate.' }); return }
+    setBusy(true); setMsg(null)
+    const { error } = await supabase.from('languages-pay-rates').update({ Rate: val }).eq('LANGUAGE', lang)
+    if (error) { setMsg({ kind: 'danger', text: error.message }); setBusy(false); return }
+    invalidateRates()
+    setEdits(p => { const n = { ...p }; delete n[lang]; return n })
+    setMsg({ kind: 'success', text: `Updated ${lang} to $${val}.` })
+    await load(); setBusy(false)
+  }
+
+  async function addLang() {
+    const lang = newLang.trim()
+    const val = Math.round(Number(newRate))
+    if (!lang) { setMsg({ kind: 'warn', text: 'Enter a language name.' }); return }
+    if (!Number.isFinite(val) || val < 0) { setMsg({ kind: 'warn', text: 'Enter a valid rate.' }); return }
+    setBusy(true); setMsg(null)
+    const { error } = await supabase.from('languages-pay-rates').insert({ LANGUAGE: lang, Rate: val })
+    if (error) { setMsg({ kind: 'danger', text: /duplicate|unique/i.test(error.message) ? `${lang} is already in the table.` : error.message }); setBusy(false); return }
+    invalidateRates()
+    setNewLang(''); setNewRate('')
+    setMsg({ kind: 'success', text: `Added ${lang} ($${val}).` })
+    await load(); setBusy(false)
+  }
+
+  async function removeLang(lang) {
+    if (!window.confirm(`Remove ${lang} from the rate table? Invoices for this language will fall back to the $880 default.`)) return
+    setBusy(true); setMsg(null)
+    const { error } = await supabase.from('languages-pay-rates').delete().eq('LANGUAGE', lang)
+    if (error) { setMsg({ kind: 'danger', text: error.message }); setBusy(false); return }
+    invalidateRates()
+    setMsg({ kind: 'success', text: `Removed ${lang}.` })
+    await load(); setBusy(false)
+  }
+
+  return (
+    <>
+      {msg && <div className={`alert alert-${msg.kind}`}>{msg.text}</div>}
+      <div className="grid-2" style={{ alignItems: 'start' }}>
+        <div className="card">
+          <div className="card-title">Language Rates ({rows.length})</div>
+          <p style={{ color: '#888', fontSize: 13, marginBottom: 10 }}>
+            Per-evaluation rate billed to districts, by language. Used to auto-fill invoice amounts.
+            Languages not listed here bill at the $880 default.
+          </p>
+          <div className="tbl-wrap">
+            <table>
+              <thead><tr><th>Language</th><th style={{ width: 140 }}>Rate ($)</th><th style={{ width: 150 }}></th></tr></thead>
+              <tbody>
+                {loading && <tr><td colSpan={3} style={{ color: '#888' }}>Loading…</td></tr>}
+                {!loading && rows.length === 0 && <tr><td colSpan={3} style={{ color: '#888' }}>No languages yet — add one on the right.</td></tr>}
+                {rows.map(r => {
+                  const lang = r.LANGUAGE
+                  const dirty = edits[lang] !== undefined && Math.round(Number(edits[lang])) !== Number(r.Rate)
+                  return (
+                    <tr key={lang}>
+                      <td>{lang}</td>
+                      <td>
+                        <input type="number" min="0" step="10" style={{ width: 100 }}
+                          value={edits[lang] !== undefined ? edits[lang] : r.Rate}
+                          onChange={e => setEdits(p => ({ ...p, [lang]: e.target.value }))} />
+                      </td>
+                      <td>
+                        <button className="btn btn-primary btn-sm" disabled={busy || !dirty} onClick={() => saveRate(lang)}>Save</button>
+                        {' '}
+                        <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => removeLang(lang)} title="Remove language">🗑</button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div className="card">
+          <div className="card-title">Add a Language</div>
+          <div className="form-group"><label>Language</label>
+            <input value={newLang} onChange={e => setNewLang(e.target.value)} placeholder="e.g. Bengali" /></div>
+          <div className="form-group"><label>Rate ($ per evaluation)</label>
+            <input type="number" min="0" step="10" value={newRate} onChange={e => setNewRate(e.target.value)} placeholder="880" /></div>
+          <button className="btn btn-primary btn-sm" disabled={busy} onClick={addLang}>+ Add Language</button>
+        </div>
+      </div>
+    </>
   )
 }
 

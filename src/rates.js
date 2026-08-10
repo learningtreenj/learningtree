@@ -7,6 +7,9 @@ export const DEFAULT_RATE = 880
 
 let ratesMap = null
 
+// Clears the cached map so the next lookup re-reads the table (call after edits).
+export function invalidateRates() { ratesMap = null }
+
 // Loads the rate table into a lowercased { language: rate } map. Cached after first call.
 export async function loadRates() {
   if (ratesMap) return ratesMap
