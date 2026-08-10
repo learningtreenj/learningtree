@@ -5,12 +5,6 @@ import { LOGO_B64, SIG_B64 } from './invoiceAssets.js'
 
 export const RATE_PER_EVAL = 880
 
-// Rate per evaluation by language. Spanish is $830; everything else $880.
-// (A full language→rate table will live in Supabase later.)
-export function rateForLanguage(language) {
-  return /spanish/i.test(language || '') ? 830 : 880
-}
-
 function fmtDate(iso) {
   if (!iso) return ''
   const d = new Date(iso)
@@ -42,7 +36,7 @@ function esc(s) {
 function invoiceHtml(data) {
   const today = new Date()
   const invoiceDate = `${today.getMonth() + 1}/${today.getDate()}/${today.getFullYear()}`
-  const rate = rateForLanguage(data.language)
+  const rate = Number(data.rate) || RATE_PER_EVAL
   const total = data.lineItems.length * rate
 
   const rows = data.lineItems.map((item, i) => {

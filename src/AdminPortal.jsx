@@ -1,7 +1,8 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { supabase, fetchAll, STATUSES, fmtDate, daysLeft, dueColor, parseRate, toISODate } from './supabase.js'
 import { Shell, Badge, StatCard, Meta } from './ui.jsx'
-import { generateInvoiceDoc, RATE_PER_EVAL, rateForLanguage } from './invoice.js'
+import { generateInvoiceDoc, RATE_PER_EVAL } from './invoice.js'
+import { getRate } from './rates.js'
 import { scoreContractors } from './smartAssign.js'
 import { extractTextFromFile } from './extractDocumentText.js'
 import { exportCasesToExcel } from './exportExcel.js'
@@ -926,6 +927,7 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
       studentName: c.Student_name || '',
       districtName: c.School_district || '',
       language: c.Language || null,
+      rate: await getRate(c.Language),
       invoiceNumber: `${c.case_number || c.id}-${seq}`,
       lineItems: items.map(l => ({ evalType: l.evalType, dateOfService: l.dateOfService })),
     })
@@ -1907,6 +1909,7 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
       studentName: selected.Cases?.Student_name || '',
       districtName: selected.Cases?.School_district || '',
       language: selected.Cases?.Language || null,
+      rate: await getRate(selected.Cases?.Language),
       invoiceNumber: `${selected.Cases?.case_number || selected.case_id}-${seq}`,
       lineItems: items.map(l => ({ evalType: l.evalType, dateOfService: l.dateOfService })),
     })
@@ -1917,7 +1920,7 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
     setBusy(true); setMsg(null)
     const caseAssignments = assignments.filter(x => x.case_id === selected.case_id && x.contractor_id != null)
     const approvedCount = caseAssignments.filter(x => qaByAssignment.get(x.id)?.qa_status === 'approved').length || 1
-    const rate = rateForLanguage(selected.Cases?.Language)
+    const rate = await getRate(selected.Cases?.Language)
     const { error } = await supabase.from('Invoices').insert({
       case_id: selected.case_id,
       district_name: selected.Cases?.School_district || null,
