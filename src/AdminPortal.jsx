@@ -26,64 +26,49 @@ function ChoiceSelect({ value, options, onChange }) {
   )
 }
 
-// Per-eval-type status. An evaluation is "Completed" only once its report is approved
-// (which creates a contractor_earnings row → its id is in completedSet).
-function evalTypeStatus(a, completedSet) {
-  if (!a || a.contractor_id == null) return { label: 'Unassigned', cls: 's-unassigned' }
-  if (completedSet.has(a.id)) return { label: 'Completed', cls: 's-completed' }
-  const acc = (a.acceptance_status || 'pending').toLowerCase()
-  if (acc === 'declined') return { label: 'Declined', cls: 's-overdue' }
-  if (acc === 'pending') return { label: 'Pending Approval', cls: 's-scheduled' }  // assigned, awaiting the evaluator's acceptance
-  const s = (a.status || '').toLowerCase()
-  if (s === 'submitted') return { label: 'Under Review', cls: 's-drafting' }        // accepted + report submitted, awaiting admin QA
-  return { label: 'In Progress', cls: 's-drafting' }                                 // accepted, working on it (purple)
+// Four-status model (case-level and per-eval):
+//   Pending Assignment → Assigned → Report Received → Complete
+// "Complete" = admin marked the case sent to the district (Cases.sent_to_district_at).
+function evalTypeStatus(a, caseRow) {
+  if (caseRow?.sent_to_district_at) return { label: 'Complete', cls: 's-completed' }
+  if (!a || a.contractor_id == null) return { label: 'Pending Assignment', cls: 's-unassigned' }
+  if ((a.status || '').toLowerCase() === 'submitted') return { label: 'Report Received', cls: 's-drafting' }
+  return { label: 'Assigned', cls: 's-assigned' }
 }
 
-// Build one expanded sub-row per requested eval type: matched assignment (evaluator + status) or Unassigned
-function buildEvalBreakdown(caseRow, asgs, completedSet) {
+// Build one expanded sub-row per requested eval type: matched assignment (evaluator + status) or unassigned
+function buildEvalBreakdown(caseRow, asgs) {
   const requested = (caseRow.evaluation_type || '').split(',').map(t => t.trim()).filter(Boolean)
   const rows = []
   const covered = new Set()
   for (const a of asgs) {
-    rows.push({ evalType: a.eval_type || '—', evaluator: a.Contractors?.name || null, status: evalTypeStatus(a, completedSet), a })
+    rows.push({ evalType: a.eval_type || '—', evaluator: a.Contractors?.name || null, status: evalTypeStatus(a, caseRow), a })
     if (a.eval_type) covered.add(a.eval_type.toLowerCase())
   }
   for (const t of requested) {
-    if (!covered.has(t.toLowerCase())) rows.push({ evalType: t, evaluator: null, status: { label: 'Unassigned', cls: 's-unassigned' }, a: null })
+    if (!covered.has(t.toLowerCase())) rows.push({ evalType: t, evaluator: null, status: evalTypeStatus(null, caseRow), a: null })
   }
   return rows
 }
 
-// A case is truly complete only when every requested eval type is assigned AND every
-// assignment's evaluation is approved/completed.
-function caseFullyComplete(caseRow, asgs, completedSet) {
-  if (!asgs.length) return false
-  const requested = (caseRow.evaluation_type || '').split(',').map(t => t.trim()).filter(Boolean)
-  const covered = new Set(asgs.map(a => (a.eval_type || '').toLowerCase()))
-  const allAssigned = requested.every(t => covered.has(t.toLowerCase()))
-  return allAssigned && asgs.every(a => completedSet.has(a.id))
-}
-
-// The single source of truth for a case's row-level status label (used for display, sort, and filter)
-function caseStatusLabel(c, asg, completedSet) {
-  if (caseFullyComplete(c, asg, completedSet)) return 'Completed'
-  if (asg.some(a => a.contractor_id != null && (a.acceptance_status || 'pending').toLowerCase() === 'pending')) return 'Pending Approval'
+// Single source of truth for a case's row-level status (display, sort, filter). One of:
+// Pending Assignment / Assigned / Report Received / Complete.
+function caseStatusLabel(c, asg) {
+  if (c.sent_to_district_at) return 'Complete'
+  if (!asg || asg.length === 0) return 'Pending Assignment'
   const reqTypes = (c.evaluation_type || '').split(',').map(t => t.trim()).filter(Boolean)
   const covered = new Set(asg.map(a => (a.eval_type || '').toLowerCase()))
-  const allSubmitted = asg.length > 0
-    && reqTypes.every(t => covered.has(t.toLowerCase()))
+  const allSubmitted = reqTypes.every(t => covered.has(t.toLowerCase()))
     && asg.every(a => a.contractor_id != null && (a.status || '').toLowerCase() === 'submitted')
-  if (allSubmitted) return 'Report Submitted'
-  if (asg.length === 0) return c.Status || 'Unassigned'
-  return 'In Progress'
+  if (allSubmitted) return 'Report Received'
+  return 'Assigned'
 }
 function caseStatusCls(label) {
   const l = (label || '').toLowerCase()
-  if (l === 'completed') return 's-completed'
-  if (l === 'pending approval') return 's-scheduled'
-  if (l.includes('submit')) return 's-submitted'
-  if (l === 'in progress') return 's-drafting'
-  if (l === 'unassigned') return 's-unassigned'
+  if (l === 'complete') return 's-completed'          // green
+  if (l === 'report received') return 's-drafting'    // purple
+  if (l === 'assigned') return 's-assigned'           // blue
+  if (l === 'pending assignment') return 's-unassigned' // red
   return 's-assigned'
 }
 
@@ -163,7 +148,7 @@ export default function AdminPortal({ user }) {
       {screen === 'dashboard' && <Dashboard assignments={assignments} openAssignments={openAssignments} dueThisWeek={dueThisWeek} loading={loading}
         onOpenCase={c => { setSelectedCase(c); setScreen('casedetail') }} cases={cases} earnings={earnings} />}
       {screen === 'referral' && <NewReferral onCreated={c => { load(); setSelectedCase(c); setScreen('casedetail') }} />}
-      {screen === 'cases' && <CaseList cases={cases} assignments={assignments} contractors={contractors} earnings={earnings} loading={loading}
+      {screen === 'cases' && <CaseList cases={cases} assignments={assignments} contractors={contractors} earnings={earnings} batches={batches} loading={loading}
         onOpen={c => { setSelectedCase(c); setScreen('casedetail') }} onChanged={load} />}
       {screen === 'casedetail' && selectedCase && <CaseDetail caseRow={selectedCase} assignments={assignments.filter(a => a.case_id === selectedCase.id)}
         allAssignments={assignments} contractors={contractors} onBack={() => setScreen('cases')} onChanged={load} />}
@@ -185,8 +170,7 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
 
   const [expanded, setExpanded] = useState({})
   const toggle = name => setExpanded(p => ({ ...p, [name]: !p[name] }))
-  const completedSet = useMemo(() => new Set((earnings || []).map(e => e.assignment_id)), [earnings])
-  const statusBadge = (a) => { const s = evalTypeStatus(a, completedSet); return <span className={`badge-s ${s.cls}`}>{s.label}</span> }
+  const statusBadge = (a) => { const s = evalTypeStatus(a, a.Cases); return <span className={`badge-s ${s.cls}`}>{s.label}</span> }
   const openCaseById = id => { const c = cases.find(x => x.id === id); if (c) onOpenCase(c) }
 
   // One row per unique student; students with multiple open evaluations expand to show each
@@ -237,7 +221,6 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
                   )
                 }
                 const nearest = g.items[0]
-                const groupPending = g.items.some(a => a.contractor_id != null && (a.acceptance_status || 'pending').toLowerCase() === 'pending')
                 const sameCase = g.items.every(x => x.case_id === g.items[0].case_id) ? g.items[0] : null
                 return (
                   <Fragment key={g.name}>
@@ -248,7 +231,7 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
                       <td>—</td>
                       <td style={dueColor(nearest.report_due_date)}>{fmtDate(nearest.report_due_date)}</td>
                       <td style={dueColor(nearest.report_due_date)}>{daysLeft(nearest.report_due_date) ?? '—'}</td>
-                      <td>{groupPending ? <span className="badge-s s-scheduled">Pending Approval</span> : <span className="badge-s s-drafting">In Progress</span>}</td>
+                      <td><span className="badge-s s-assigned">Assigned</span></td>
                     </tr>
                     {expanded[g.name] && g.items.map(a => (
                       <tr key={a.id} style={{ background: '#f8fafc' }}>
@@ -529,7 +512,7 @@ function NewReferral({ onCreated }) {
   )
 }
 
-function CaseList({ cases, assignments, contractors = [], earnings = [], loading, onOpen, onChanged }) {
+function CaseList({ cases, assignments, contractors = [], earnings = [], batches = [], loading, onOpen, onChanged }) {
   const [q, setQ] = useState('')
   const [chip, setChip] = useState('all')
   const [expanded, setExpanded] = useState({})
@@ -584,8 +567,14 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
     for (const a of assignments) { m[a.case_id] = m[a.case_id] || []; m[a.case_id].push(a) }
     return m
   }, [assignments])
-  // Assignment ids whose evaluation has been approved/completed (an earning was created)
-  const completedSet = useMemo(() => new Set(earnings.map(e => e.assignment_id)), [earnings])
+  // When each assignment's evaluator was paid: earning → payment batch's paid_at
+  const paidByAssignment = useMemo(() => {
+    const batchPaid = new Map((batches || []).filter(b => b.paid_at).map(b => [b.id, b.paid_at]))
+    const m = new Map()
+    for (const e of (earnings || [])) if (e.payment_batch_id && batchPaid.has(e.payment_batch_id)) m.set(e.assignment_id, batchPaid.get(e.payment_batch_id))
+    return m
+  }, [earnings, batches])
+  const casePaidDate = (asg) => { let latest = null; for (const a of asg) { const p = paidByAssignment.get(a.id); if (p && (!latest || p > latest)) latest = p } return latest }
 
   // ── Per-column sort + filter ──
   const [sortCol, setSortCol] = useState(null)
@@ -602,7 +591,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
 
   const COLS = [
     ['case_number', 'Case #'], ['Student_name', 'Student'], ['School_district', 'District'],
-    ['evaluation_type', 'Eval Types'], ['Report_Due_date', 'Due Date'], ['assignments', 'Assignments'], ['status', 'Status'],
+    ['evaluation_type', 'Eval Types'], ['Report_Due_date', 'Due Date'], ['assignments', 'Assignments'], ['status', 'Status'], ['payment_date', 'Payment Date'],
   ]
   // District + Eval Types + Status filter by multi-select checkboxes of the distinct values
   const CHECKBOX_COLS = { School_district: true, evaluation_type: true, status: true }
@@ -614,9 +603,9 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
   }, [cases])
   const statusOptions = useMemo(() => {
     const s = new Set()
-    for (const c of cases) s.add(caseStatusLabel(c, byCase[c.id] || [], completedSet))
+    for (const c of cases) s.add(caseStatusLabel(c, byCase[c.id] || []))
     return [...s].sort((a, b) => a.localeCompare(b))
-  }, [cases, byCase, completedSet])
+  }, [cases, byCase])
   const optionsFor = key => key === 'School_district' ? districtOptions : key === 'evaluation_type' ? evalOptions : statusOptions
   const toggleCheck = (key, val) => setColChecks(p => {
     const cur = new Set(p[key] || [])
@@ -628,7 +617,8 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
     switch (col) {
       case 'Report_Due_date': return c.Report_Due_date || ''       // ISO date sorts lexically
       case 'assignments': return asg.length                        // numeric
-      case 'status': return caseStatusLabel(c, asg, completedSet).toLowerCase()
+      case 'status': return caseStatusLabel(c, asg).toLowerCase()
+      case 'payment_date': return casePaidDate(asg) || ''
       case 'case_number': return (c.case_number || '').toLowerCase()
       case 'Student_name': return (c.Student_name || '').toLowerCase()
       case 'School_district': return (c.School_district || '').toLowerCase()
@@ -639,6 +629,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
   function colFilterVal(col, c) {
     const asg = byCase[c.id] || []
     if (col === 'assignments') return asg.map(a => `${a.eval_type || ''} ${a.Contractors?.name || ''}`).join(' ').toLowerCase()
+    if (col === 'payment_date') { const p = casePaidDate(asg); return p ? fmtDate(String(p).slice(0, 10)).toLowerCase() : '' }
     if (col === 'Report_Due_date') return `${c.Report_Due_date || ''} ${fmtDate(c.Report_Due_date)}`.toLowerCase()
     return String(colSortVal(col, c)).toLowerCase()
   }
@@ -647,7 +638,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
     const asg = byCase[c.id] || []
     // "Done" = every evaluation approved (not merely submitted) — so a case with a
     // submitted-but-unapproved report stays in Active until it's approved/sent.
-    const done = caseFullyComplete(c, asg, completedSet)
+    const done = caseStatusLabel(c, asg) === 'Complete'
     if (chip === 'active' && done) return false
     if (chip === 'completed' && !done) return false
     if (chip === 'due') {
@@ -671,7 +662,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
     return evalSel.some(v => toks.includes(v))
   })
   const statusSel = colChecks.status || []
-  if (statusSel.length) rows = rows.filter(c => statusSel.includes(caseStatusLabel(c, byCase[c.id] || [], completedSet)))
+  if (statusSel.length) rows = rows.filter(c => statusSel.includes(caseStatusLabel(c, byCase[c.id] || [])))
   if (sortCol) {
     rows = [...rows].sort((a, b) => {
       const va = colSortVal(sortCol, a), vb = colSortVal(sortCol, b)
@@ -738,19 +729,19 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
             ))}
           </tr></thead>
           <tbody>
-            {loading && <tr><td colSpan={7} style={{ color: '#888' }}>Loading…</td></tr>}
-            {!loading && rows.length === 0 && <tr><td colSpan={7} style={{ color: '#888' }}>No cases match.</td></tr>}
+            {loading && <tr><td colSpan={8} style={{ color: '#888' }}>Loading…</td></tr>}
+            {!loading && rows.length === 0 && <tr><td colSpan={8} style={{ color: '#888' }}>No cases match.</td></tr>}
             {rows.slice(0, 200).map(c => {
               const asg = byCase[c.id] || []
-              const breakdown = expanded[c.id] ? buildEvalBreakdown(c, asg, completedSet) : null
+              const breakdown = expanded[c.id] ? buildEvalBreakdown(c, asg) : null
               const canExpand = asg.length > 0 || (c.evaluation_type || '').trim().length > 0
-              const complete = caseFullyComplete(c, asg, completedSet)
-              const statusLbl = caseStatusLabel(c, asg, completedSet)
+              const statusLbl = caseStatusLabel(c, asg)
+              const complete = statusLbl === 'Complete'
               return (
                 <Fragment key={c.id}>
                   <tr style={complete ? { background: 'var(--gray-bg)', color: 'var(--muted)' } : undefined} title={complete ? 'Completed case' : undefined}>
                     <td><span className="tbl-link" onClick={() => onOpen(c)}>{c.case_number || c.id}</span></td>
-                    <td>{c.Student_name || '—'}</td>
+                    <td><span className="tbl-link" onClick={() => onOpen(c)}>{c.Student_name || '—'}</span></td>
                     <td>{c.School_district || '—'}</td>
                     <td>{c.evaluation_type || '—'}</td>
                     <td style={dueColor(c.Report_Due_date)}>{fmtDate(c.Report_Due_date)}</td>
@@ -763,6 +754,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
                           </span>}
                     </td>
                     <td><span className={`badge-s ${caseStatusCls(statusLbl)}`}>{statusLbl}</span></td>
+                    <td>{(() => { const p = casePaidDate(asg); return p ? fmtDate(String(p).slice(0, 10)) : '—' })()}</td>
                   </tr>
                   {expanded[c.id] && breakdown.map((r, i) => (
                     <Fragment key={`${c.id}-e-${i}`}>
@@ -781,10 +773,11 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
                           {!r.a && <>{' '}<button className="btn btn-danger-outline btn-sm" title="Remove this evaluation type from the case" disabled={rowBusy} onClick={() => removeEvalType(c, r.evalType)}>🗑</button></>}
                         </td>
                         <td><span className={`badge-s ${r.status.cls}`}>{r.status.label}</span></td>
+                        <td></td>
                       </tr>
                       {r.a && reassignId === r.a.id && (
                         <tr>
-                          <td colSpan={7} style={{ background: 'var(--accent-light)' }}>
+                          <td colSpan={8} style={{ background: 'var(--accent-light)' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', paddingLeft: 40 }}>
                               <strong style={{ fontSize: 13 }}>Reassign {r.evalType} to:</strong>
                               <select value={reassignTo} onChange={e => setReassignTo(e.target.value)} style={{ padding: '6px 10px', minWidth: 240 }}>
@@ -803,7 +796,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], loading
                       )}
                       {r.a && confirmRemoveId === r.a.id && (
                         <tr>
-                          <td colSpan={7} style={{ background: 'var(--red-bg)' }}>
+                          <td colSpan={8} style={{ background: 'var(--red-bg)' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', paddingLeft: 40 }}>
                               <span style={{ fontSize: 13, color: 'var(--red)' }}>Remove <strong>{r.evalType}</strong>{r.evaluator ? ` — ${r.evaluator}` : ''}? Deletes just this assignment, not the case.</span>
                               <button className="btn btn-danger btn-sm" disabled={rowBusy} onClick={() => removeAssignment(r.a)}>Yes, remove</button>
@@ -862,6 +855,17 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
       Status: c.Status || '',
     })
     setMsg(null); setConfirmDelete(false); setEditing(true)
+  }
+
+  async function markSent() {
+    const sending = !c.sent_to_district_at
+    setBusy(true); setMsg(null)
+    const val = sending ? new Date().toISOString() : null
+    const { error } = await supabase.from('Cases').update({ sent_to_district_at: val }).eq('id', c.id)
+    if (error) { setMsg({ kind: 'danger', text: error.message }); setBusy(false); return }
+    setC(prev => ({ ...prev, sent_to_district_at: val }))
+    setMsg({ kind: 'success', text: sending ? 'Marked as sent to the district — case is now Complete.' : 'Reopened — case is no longer marked Complete.' })
+    onChanged(); setBusy(false)
   }
 
   async function saveEdit() {
@@ -1091,9 +1095,12 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
         <div className="card" style={{ marginBottom: 14 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10, alignItems: 'flex-start' }}>
             <h2 style={{ fontSize: 17, fontWeight: 800 }}>Case {c.case_number || c.id} — {c.Student_name || 'Student'}</h2>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <Badge status={c.Status} />
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              {(() => { const lbl = caseStatusLabel(c, assignments); return <span className={`badge-s ${caseStatusCls(lbl)}`}>{lbl}</span> })()}
               <button className="btn btn-secondary btn-sm" onClick={startEdit}>✏️ Edit</button>
+              {c.sent_to_district_at
+                ? <button className="btn btn-ghost btn-sm" disabled={busy} onClick={markSent} title="Reopen — undo sent-to-district">↩ Reopen</button>
+                : <button className="btn btn-primary btn-sm" disabled={busy} onClick={markSent} title="Mark this case sent to the school district (sets status to Complete)">✅ Mark sent to district</button>}
               <button className="btn btn-danger-outline btn-sm" onClick={() => { setConfirmDelete(true); setMsg(null) }}>🗑 Delete</button>
             </div>
           </div>
@@ -1713,10 +1720,16 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
     })
   }
 
-  async function viewReport(a) {
-    if (!a.report_url) { setMsg({ kind: 'warn', text: 'No report file on this assignment (submitted via the old portal — file is in Retool storage).' }); return }
-    const { data, error } = await supabase.storage.from('reports').createSignedUrl(a.report_url, 300)
+  async function viewReportPath(path) {
+    if (!path) return
+    const { data, error } = await supabase.storage.from('reports').createSignedUrl(path, 300)
     if (!error && data?.signedUrl) window.open(data.signedUrl, '_blank')
+  }
+  // All report files on an assignment (multi-upload aware, falls back to the legacy single report_url)
+  function reportFilesOf(a) {
+    if (Array.isArray(a?.report_files) && a.report_files.length) return a.report_files
+    if (a?.report_url) return [{ path: a.report_url, name: a.report_url.split('/').pop() }]
+    return []
   }
 
   // A case is ready to send when every submitted evaluation on it is approved
@@ -1904,7 +1917,13 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
               🔍 Review — {selected.Cases?.case_number} · {selected.eval_type} · {selected.Contractors?.name}
             </div>
             <div style={{ marginBottom: 10 }}>
-              <button className="btn btn-secondary btn-sm" onClick={() => viewReport(selected)}>📄 View Report{selected.report_file_name ? ` (${selected.report_file_name})` : ''}</button>
+              {(() => {
+                const files = reportFilesOf(selected)
+                if (!files.length) return <span style={{ fontSize: 12, color: '#888' }}>No report file on this assignment.</span>
+                return files.map((f, i) => (
+                  <button key={f.path || i} className="btn btn-secondary btn-sm" style={{ marginRight: 6, marginBottom: 4 }} onClick={() => viewReportPath(f.path)}>📄 {f.name || f.path.split('/').pop()}</button>
+                ))
+              })()}
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 10 }}>
               {QA_CHECKS.map(([key, label]) => (
