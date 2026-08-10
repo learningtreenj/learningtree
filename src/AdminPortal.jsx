@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { supabase, fetchAll, STATUSES, fmtDate, daysLeft, dueColor, parseRate, toISODate } from './supabase.js'
 import { Shell, Badge, StatCard, Meta } from './ui.jsx'
-import { generateInvoiceDoc, RATE_PER_EVAL } from './invoice.js'
+import { generateInvoiceDoc, RATE_PER_EVAL, rateForLanguage } from './invoice.js'
 import { scoreContractors } from './smartAssign.js'
 import { extractTextFromFile } from './extractDocumentText.js'
 import { exportCasesToExcel } from './exportExcel.js'
@@ -23,6 +23,21 @@ function ChoiceSelect({ value, options, onChange }) {
       <option value="">— Select —</option>
       {list.map(o => <option key={o} value={o}>{options.includes(o) ? o : `${o} (existing)`}</option>)}
     </select>
+  )
+}
+
+// Multi-select checkbox group; preserves any existing values not in the standard option list
+function MultiCheck({ selected, options, onToggle }) {
+  const extras = (selected || []).filter(s => !options.includes(s))
+  const all = [...options, ...extras]
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, border: '1px solid var(--border)', borderRadius: 5, padding: '7px 9px' }}>
+      {all.map(o => (
+        <label key={o} style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 13, cursor: 'pointer' }}>
+          <input type="checkbox" checked={(selected || []).includes(o)} onChange={() => onToggle(o)} /> {options.includes(o) ? o : `${o} (existing)`}
+        </label>
+      ))}
+    </div>
   )
 }
 
@@ -188,6 +203,24 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
     return out
   }, [openAssignments])
 
+  // Filter the dashboard by evaluator — type a name and/or check names (Excel-style)
+  const [cFilter, setCFilter] = useState('')
+  const [cChecks, setCChecks] = useState([])
+  const [cMenu, setCMenu] = useState(false)
+  useEffect(() => {
+    if (!cMenu) return
+    const h = () => setCMenu(false)
+    document.addEventListener('click', h)
+    return () => document.removeEventListener('click', h)
+  }, [cMenu])
+  const contractorOptions = useMemo(() => [...new Set(openAssignments.map(a => a.Contractors?.name).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [openAssignments])
+  const filteredGroups = studentGroups.filter(g => {
+    const names = g.items.map(a => a.Contractors?.name || '')
+    const textOk = !cFilter.trim() || names.some(n => n.toLowerCase().includes(cFilter.trim().toLowerCase()))
+    const checkOk = cChecks.length === 0 || names.some(n => cChecks.includes(n))
+    return textOk && checkOk
+  })
+
   return (
     <>
       {overdue.length > 0 && <div className="alert alert-danger">⚠️ <span><strong>{overdue.length} assignment{overdue.length > 1 ? 's are' : ' is'} past due.</strong> Check the Due Date Monitor.</span></div>}
@@ -198,14 +231,34 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
         <StatCard num={awaiting} label="Awaiting Reports" color="orange" />
       </div>
       <div className="card">
-        <div className="card-title">Upcoming Due Dates</div>
+        <div className="card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+          <span>Upcoming Due Dates</span>
+          <div style={{ position: 'relative', fontWeight: 400, display: 'flex', gap: 6, alignItems: 'center' }}>
+            <input type="text" placeholder="🔍 Filter by evaluator…" value={cFilter} onChange={e => setCFilter(e.target.value)}
+              style={{ padding: '5px 8px', fontSize: 13, border: '1px solid var(--border)', borderRadius: 5, width: 190 }} />
+            <button className="btn btn-ghost btn-sm" onClick={e => { e.stopPropagation(); setCMenu(m => !m) }}>
+              Evaluators{cChecks.length ? ` (${cChecks.length})` : ''} ▾
+            </button>
+            {cMenu && (
+              <div onClick={e => e.stopPropagation()} style={{ position: 'absolute', right: 0, top: '100%', zIndex: 20, background: '#fff', border: '1px solid var(--border)', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.18)', padding: 8, minWidth: 220, maxHeight: 280, overflowY: 'auto', textAlign: 'left' }}>
+                {contractorOptions.length === 0 && <div style={{ fontSize: 12, color: '#888' }}>No evaluators with open cases</div>}
+                {contractorOptions.map(n => (
+                  <label key={n} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, padding: '2px 0', cursor: 'pointer' }}>
+                    <input type="checkbox" checked={cChecks.includes(n)} onChange={() => setCChecks(p => p.includes(n) ? p.filter(x => x !== n) : [...p, n])} /> {n}
+                  </label>
+                ))}
+                {cChecks.length > 0 && <div style={{ marginTop: 6 }}><span className="tbl-link" style={{ fontSize: 12 }} onClick={() => setCChecks([])}>Clear</span></div>}
+              </div>
+            )}
+          </div>
+        </div>
         <div className="tbl-wrap">
           <table>
             <thead><tr><th>Case #</th><th>Student</th><th>Evaluation</th><th>Contractor</th><th>Due Date</th><th>Days Left</th><th>Status</th></tr></thead>
             <tbody>
               {loading && <tr><td colSpan={7} style={{ color: '#888' }}>Loading…</td></tr>}
-              {!loading && studentGroups.length === 0 && <tr><td colSpan={7} style={{ color: '#888' }}>No open assignments.</td></tr>}
-              {studentGroups.slice(0, 15).map(g => {
+              {!loading && filteredGroups.length === 0 && <tr><td colSpan={7} style={{ color: '#888' }}>No open assignments.</td></tr>}
+              {filteredGroups.slice(0, 15).map(g => {
                 if (g.items.length === 1) {
                   const a = g.items[0]
                   return (
@@ -857,6 +910,25 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
     setMsg(null); setConfirmDelete(false); setEditing(true)
   }
 
+  // Auto-fills the district invoice from the case's submitted evaluations (student, date,
+  // invoice #, dates/types of service, rate by language, sum).
+  function downloadCaseInvoice() {
+    const submitted = assignments.filter(a => a.contractor_id != null && (a.status || '').toLowerCase() === 'submitted')
+    const src = submitted.length ? submitted : assignments.filter(a => a.contractor_id != null)
+    if (!src.length) { setMsg({ kind: 'warn', text: 'No submitted evaluations yet to invoice.' }); return }
+    const items = src.map(a => ({ assignmentId: a.id, evalType: a.eval_type || '', dateOfService: a.submitted_at || a.testing_date }))
+      .sort((x, y) => x.assignmentId - y.assignmentId)
+    const minId = items.reduce((m, l) => Math.min(m, l.assignmentId), items[0].assignmentId)
+    generateInvoiceDoc({
+      caseNumber: c.case_number || String(c.id),
+      studentName: c.Student_name || '',
+      districtName: c.School_district || '',
+      language: c.Language || null,
+      invoiceNumber: `${c.case_number || c.id}-${String(minId).padStart(4, '0')}`,
+      lineItems: items.map(l => ({ evalType: l.evalType, dateOfService: l.dateOfService })),
+    })
+  }
+
   async function markSent() {
     const sending = !c.sent_to_district_at
     setBusy(true); setMsg(null)
@@ -1098,6 +1170,8 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
               {(() => { const lbl = caseStatusLabel(c, assignments); return <span className={`badge-s ${caseStatusCls(lbl)}`}>{lbl}</span> })()}
               <button className="btn btn-secondary btn-sm" onClick={startEdit}>✏️ Edit</button>
+              {assignments.some(a => a.contractor_id != null && (a.status || '').toLowerCase() === 'submitted') &&
+                <button className="btn btn-secondary btn-sm" onClick={downloadCaseInvoice} title="Download the district invoice for this case">⬇ Invoice</button>}
               {c.sent_to_district_at
                 ? <button className="btn btn-ghost btn-sm" disabled={busy} onClick={markSent} title="Reopen — undo sent-to-district">↩ Reopen</button>
                 : <button className="btn btn-primary btn-sm" disabled={busy} onClick={markSent} title="Mark this case sent to the school district (sets status to Complete)">✅ Mark sent to district</button>}
@@ -1318,14 +1392,21 @@ function ContractorList({ contractors, assignments, onChanged }) {
   }
 
   function startEdit(k) {
+    const uniq = arr => [...new Set(arr)]
+    const fields = uniq((k.field || '').split(',').map(t => t.trim()).filter(Boolean))
+    const languages = uniq([k.language, k.language_2].filter(Boolean).flatMap(s => s.split(',').map(t => t.trim())).filter(Boolean))
     setForm({
       name: k.name || '', email: k.email || '', phone: k.phone || '', company_name: k.company_name || '',
-      field: k.field || '', language: k.language || '', language_2: k.language_2 || '', county: k.county || '',
+      fields, languages, county: k.county || '',
       address: k.address || '', zip_code: k.zip_code != null ? String(k.zip_code) : '', current_rate: k.current_rate || '',
       w9_on_file: !!k.w9_on_file, criminal_history_done: !!k.criminal_history_done, NJDOE_submitted: k.NJDOE_submitted || '',
     })
     setMsg(null); setEditing(k)
   }
+  const toggleMulti = (key, val) => setForm(p => {
+    const cur = p[key] || []
+    return { ...p, [key]: cur.includes(val) ? cur.filter(x => x !== val) : [...cur, val] }
+  })
 
   async function saveEdit() {
     if (!form.name.trim()) { setMsg({ kind: 'warn', text: 'Name is required.' }); return }
@@ -1333,7 +1414,10 @@ function ContractorList({ contractors, assignments, onChanged }) {
     const zip = String(form.zip_code || '').replace(/\D/g, '')
     const patch = {
       name: form.name.trim(), email: form.email || null, phone: form.phone || null, company_name: form.company_name || null,
-      field: form.field || null, language: form.language || null, language_2: form.language_2 || null, county: form.county || null,
+      field: (form.fields || []).join(', ') || null,
+      language: (form.languages || [])[0] || null,
+      language_2: (form.languages || []).length > 1 ? form.languages.slice(1).join(', ') : null,
+      county: form.county || null,
       address: form.address || null, zip_code: zip ? Number(zip) : null, current_rate: form.current_rate || null,
       w9_on_file: !!form.w9_on_file, criminal_history_done: !!form.criminal_history_done, NJDOE_submitted: form.NJDOE_submitted || null,
     }
@@ -1370,17 +1454,11 @@ function ContractorList({ contractors, assignments, onChanged }) {
           <div className="form-group"><label>Phone</label><input value={form.phone} onChange={e => setF('phone', e.target.value)} /></div>
         </div>
         <div className="form-group"><label>Company Name</label><input value={form.company_name} onChange={e => setF('company_name', e.target.value)} /></div>
-        <div className="form-row">
-          <div className="form-group"><label>Field / Specialty</label>
-            <ChoiceSelect value={form.field} options={CONTRACTOR_FIELDS} onChange={v => setF('field', v)} /></div>
-          <div className="form-group"><label>Rate</label><input value={form.current_rate} onChange={e => setF('current_rate', e.target.value)} placeholder="e.g. $880" /></div>
-        </div>
-        <div className="form-row">
-          <div className="form-group"><label>Primary Language</label>
-            <ChoiceSelect value={form.language} options={LANGUAGES} onChange={v => setF('language', v)} /></div>
-          <div className="form-group"><label>Second Language</label>
-            <ChoiceSelect value={form.language_2} options={LANGUAGES} onChange={v => setF('language_2', v)} /></div>
-        </div>
+        <div className="form-group"><label>Field / Specialty (select all that apply)</label>
+          <MultiCheck selected={form.fields || []} options={CONTRACTOR_FIELDS} onToggle={v => toggleMulti('fields', v)} /></div>
+        <div className="form-group"><label>Languages (select all that apply)</label>
+          <MultiCheck selected={form.languages || []} options={LANGUAGES} onToggle={v => toggleMulti('languages', v)} /></div>
+        <div className="form-group"><label>Rate</label><input value={form.current_rate} onChange={e => setF('current_rate', e.target.value)} placeholder="e.g. $880" /></div>
         <div className="form-group"><label>Address</label><input value={form.address} onChange={e => setF('address', e.target.value)} /></div>
         <div className="form-row">
           <div className="form-group"><label>County</label><input value={form.county} onChange={e => setF('county', e.target.value)} /></div>
@@ -1835,17 +1913,18 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
     setBusy(true); setMsg(null)
     const caseAssignments = assignments.filter(x => x.case_id === selected.case_id && x.contractor_id != null)
     const approvedCount = caseAssignments.filter(x => qaByAssignment.get(x.id)?.qa_status === 'approved').length || 1
+    const rate = rateForLanguage(selected.Cases?.Language)
     const { error } = await supabase.from('Invoices').insert({
       case_id: selected.case_id,
       district_name: selected.Cases?.School_district || null,
-      amount: approvedCount * RATE_PER_EVAL,
+      amount: approvedCount * rate,
       issued_date: new Date().toISOString().slice(0, 10),
       status: 'Sent',
     })
     if (!error) {
       await supabase.from('qa_reviews').update({ invoice_sent_at: new Date().toISOString(), invoice_status: 'sent' }).eq('assignment_id', selected.id)
     }
-    setMsg(error ? { kind: 'danger', text: error.message } : { kind: 'success', text: `Invoice recorded in Client Invoices ($${(approvedCount * RATE_PER_EVAL).toLocaleString()}).` })
+    setMsg(error ? { kind: 'danger', text: error.message } : { kind: 'success', text: `Invoice recorded in Client Invoices ($${(approvedCount * rate).toLocaleString()}).` })
     onChanged(); setBusy(false)
   }
 

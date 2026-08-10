@@ -5,6 +5,12 @@ import { LOGO_B64, SIG_B64 } from './invoiceAssets.js'
 
 export const RATE_PER_EVAL = 880
 
+// Rate per evaluation by language. Spanish is $830; everything else $880.
+// (A full language→rate table will live in Supabase later.)
+export function rateForLanguage(language) {
+  return /spanish/i.test(language || '') ? 830 : 880
+}
+
 function fmtDate(iso) {
   if (!iso) return ''
   const d = new Date(iso)
@@ -36,14 +42,15 @@ function esc(s) {
 function invoiceHtml(data) {
   const today = new Date()
   const invoiceDate = `${today.getMonth() + 1}/${today.getDate()}/${today.getFullYear()}`
-  const total = data.lineItems.length * RATE_PER_EVAL
+  const rate = rateForLanguage(data.language)
+  const total = data.lineItems.length * rate
 
   const rows = data.lineItems.map((item, i) => {
     const last = i === data.lineItems.length - 1
     return `<tr>
       <td class=cell>${fmtDate(item.dateOfService)}</td>
       <td class=cell>${esc(fmtEvalType(item.evalType, data.language))}</td>
-      <td class="cell rt">$${RATE_PER_EVAL}</td>
+      <td class="cell rt">$${rate}</td>
       <td class="cell rt"${last ? ' style="font-weight:bold"' : ''}>${last ? fmtMoney(total) : ''}</td>
     </tr>`
   }).join('')
@@ -63,9 +70,10 @@ function invoiceHtml(data) {
 <body>
 <table width="100%" style="border-collapse:collapse;margin-bottom:2pt"><tr>
   <td style="width:64pt;vertical-align:top"><img src="logo.jpeg" width="52" height="60" style="width:52pt;height:60pt"></td>
-  <td style="vertical-align:top;font-weight:bold;font-size:12pt">Learning Tree Multicultural/Multilingual</td>
-  <td style="vertical-align:middle;text-align:center;font-size:20pt;font-weight:bold;letter-spacing:2pt">INVOICE</td>
-  <td style="vertical-align:top;text-align:right;font-size:12pt">Evaluation and Consulting, Inc.</td>
+  <td style="vertical-align:top">
+    <div style="font-weight:bold;font-size:13pt">Learning Tree Multicultural/Multilingual Evaluation and Consulting, Inc.</div>
+    <div style="text-align:center;font-size:20pt;font-weight:bold;letter-spacing:3pt;margin-top:4pt">INVOICE</div>
+  </td>
 </tr></table>
 <p>238 West End Ave.</p>
 <p>Green Brook, NJ 08812</p>

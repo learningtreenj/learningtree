@@ -226,6 +226,23 @@ function AssignmentDetail({ assignment, contractor, onBack }) {
     if (!error && data?.signedUrl) window.open(data.signedUrl, '_blank')
   }
 
+  async function deleteReportFile(f) {
+    if (!window.confirm(`Remove "${f.name || f.path.split('/').pop()}"? This deletes the uploaded file.`)) return
+    setBusy(true); setMsg(null)
+    await supabase.storage.from('reports').remove([f.path])   // best-effort storage cleanup
+    const remaining = reportFiles.filter(x => x.path !== f.path)
+    const patch = { report_files: remaining, report_url: remaining.length ? remaining[remaining.length - 1].path : null }
+    // If the last file is removed, the report is no longer submitted
+    if (remaining.length === 0) { patch.status = 'Draft Report'; patch.submitted_at = null }
+    const { error } = await supabase.from('Assignments').update(patch).eq('id', a.id)
+    if (error) { setMsg({ kind: 'danger', text: error.message }); setBusy(false); return }
+    setReportFiles(remaining)
+    setReportUrl(patch.report_url || '')
+    if (remaining.length === 0) setStatus('Draft Report')
+    setMsg({ kind: 'success', text: remaining.length ? 'File removed.' : 'File removed — this report is no longer marked Submitted.' })
+    setBusy(false)
+  }
+
   async function viewReferral() {
     if (!c.referral_file_path) return
     const { data, error } = await supabase.storage.from('referrals').createSignedUrl(c.referral_file_path, 300)
@@ -364,7 +381,10 @@ function AssignmentDetail({ assignment, contractor, onBack }) {
                 ? <>
                     <div style={{ marginBottom: 4 }}>Uploaded {reportFiles.length} file{reportFiles.length === 1 ? '' : 's'}:</div>
                     {reportFiles.map(f => (
-                      <div key={f.path}><span className="tbl-link" onClick={() => viewReport(f.path)}>📄 {f.name || f.path.split('/').pop()}</span></div>
+                      <div key={f.path} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span className="tbl-link" onClick={() => viewReport(f.path)}>📄 {f.name || f.path.split('/').pop()}</span>
+                        <span className="tbl-link" style={{ color: 'var(--red)', fontSize: 12 }} onClick={() => deleteReportFile(f)}>✕ remove</span>
+                      </div>
                     ))}
                     <div style={{ marginTop: 4 }}>Uploading more adds to this list (a file with the same name replaces the old one).</div>
                   </>
