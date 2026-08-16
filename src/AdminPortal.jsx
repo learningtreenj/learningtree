@@ -113,7 +113,7 @@ export default function AdminPortal({ user }) {
     setLoading(true)
     const [c, a, k, i, q, e, b, m] = await Promise.all([
       fetchAll(() => supabase.from('Cases').select('*').order('id', { ascending: false })),
-      fetchAll(() => supabase.from('Assignments').select('*, Contractors(identifier, name, current_rate, email), Cases(id, case_number, Student_name, School_district, Language, County)').order('report_due_date', { ascending: true, nullsFirst: false }).order('id')),
+      fetchAll(() => supabase.from('Assignments').select('*, Contractors(identifier, name, current_rate, email), Cases(id, case_number, Student_name, School_district, Language, County, district_paid)').order('report_due_date', { ascending: true, nullsFirst: false }).order('id')),
       fetchAll(() => supabase.from('Contractors').select('*').order('name').order('identifier')),
       fetchAll(() => supabase.from('Invoices').select('*').order('id', { ascending: false })),
       fetchAll(() => supabase.from('qa_reviews').select('*').order('assignment_id')),
@@ -677,6 +677,19 @@ function NewReferral({ onCreated }) {
   )
 }
 
+// Yes (green) / No (light red) toggle styling for the "District Paid" column.
+function paidBtnStyle(isYes, active) {
+  const base = { border: '1px solid', borderRadius: 5, padding: '3px 11px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }
+  if (isYes) {
+    return active
+      ? { ...base, background: '#1a7a3c', borderColor: '#1a7a3c', color: '#fff' }
+      : { ...base, background: '#fff', borderColor: '#c7e3cf', color: '#8aab95' }
+  }
+  return active
+    ? { ...base, background: '#f6c9cc', borderColor: '#e79aa0', color: '#9b2c2c' }
+    : { ...base, background: '#fff', borderColor: '#efd2d4', color: '#c79a9d' }
+}
+
 function CaseList({ cases, assignments, contractors = [], earnings = [], batches = [], loading, onOpen, onChanged }) {
   const [q, setQ] = useState('')
   const [chip, setChip] = useState('all')
@@ -732,14 +745,16 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
     for (const a of assignments) { m[a.case_id] = m[a.case_id] || []; m[a.case_id].push(a) }
     return m
   }, [assignments])
-  // When each assignment's evaluator was paid: earning → payment batch's paid_at
-  const paidByAssignment = useMemo(() => {
-    const batchPaid = new Map((batches || []).filter(b => b.paid_at).map(b => [b.id, b.paid_at]))
-    const m = new Map()
-    for (const e of (earnings || [])) if (e.payment_batch_id && batchPaid.has(e.payment_batch_id)) m.set(e.assignment_id, batchPaid.get(e.payment_batch_id))
-    return m
-  }, [earnings, batches])
-  const casePaidDate = (asg) => { let latest = null; for (const a of asg) { const p = paidByAssignment.get(a.id); if (p && (!latest || p > latest)) latest = p } return latest }
+
+  // Manually mark whether the school district has paid Learning Tree for a case.
+  async function setDistrictPaid(c, paid) {
+    setRowBusy(true); setRowMsg(null)
+    const { error } = await supabase.from('Cases')
+      .update({ district_paid: paid, district_paid_at: paid ? new Date().toISOString() : null })
+      .eq('id', c.id)
+    if (error) setRowMsg({ kind: 'danger', text: error.message })
+    onChanged && onChanged(); setRowBusy(false)
+  }
 
   // ── Per-column sort + filter ──
   const [sortCol, setSortCol] = useState(null)
@@ -756,7 +771,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
 
   const COLS = [
     ['case_number', 'Case #'], ['Student_name', 'Student'], ['School_district', 'District'],
-    ['evaluation_type', 'Eval Types'], ['Report_Due_date', 'Due Date'], ['assignments', 'Assignments'], ['status', 'Status'], ['payment_date', 'Payment Date'],
+    ['evaluation_type', 'Eval Types'], ['Report_Due_date', 'Due Date'], ['assignments', 'Assignments'], ['status', 'Status'], ['district_paid', 'District Paid'],
   ]
   // District + Eval Types + Status filter by multi-select checkboxes of the distinct values
   const CHECKBOX_COLS = { School_district: true, evaluation_type: true, status: true }
@@ -783,7 +798,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
       case 'Report_Due_date': return c.Report_Due_date || ''       // ISO date sorts lexically
       case 'assignments': return asg.length                        // numeric
       case 'status': return caseStatusLabel(c, asg).toLowerCase()
-      case 'payment_date': return casePaidDate(asg) || ''
+      case 'district_paid': return c.district_paid ? 'yes' : 'no'
       case 'case_number': return (c.case_number || '').toLowerCase()
       case 'Student_name': return (c.Student_name || '').toLowerCase()
       case 'School_district': return (c.School_district || '').toLowerCase()
@@ -794,7 +809,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
   function colFilterVal(col, c) {
     const asg = byCase[c.id] || []
     if (col === 'assignments') return asg.map(a => `${a.eval_type || ''} ${a.Contractors?.name || ''}`).join(' ').toLowerCase()
-    if (col === 'payment_date') { const p = casePaidDate(asg); return p ? fmtDate(String(p).slice(0, 10)).toLowerCase() : '' }
+    if (col === 'district_paid') return c.district_paid ? 'yes' : 'no'
     if (col === 'Report_Due_date') return `${c.Report_Due_date || ''} ${fmtDate(c.Report_Due_date)}`.toLowerCase()
     return String(colSortVal(col, c)).toLowerCase()
   }
@@ -919,7 +934,15 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
                           </span>}
                     </td>
                     <td><span className={`badge-s ${caseStatusCls(statusLbl)}`}>{statusLbl}</span></td>
-                    <td>{(() => { const p = casePaidDate(asg); return p ? fmtDate(String(p).slice(0, 10)) : '—' })()}</td>
+                    <td style={{ whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
+                      <button type="button" disabled={rowBusy} onClick={() => setDistrictPaid(c, true)}
+                        title="School district has paid Learning Tree"
+                        style={paidBtnStyle(true, c.district_paid === true)}>Yes</button>
+                      {' '}
+                      <button type="button" disabled={rowBusy} onClick={() => setDistrictPaid(c, false)}
+                        title="Not yet paid by the school district"
+                        style={paidBtnStyle(false, !c.district_paid)}>No</button>
+                    </td>
                   </tr>
                   {expanded[c.id] && breakdown.map((r, i) => (
                     <Fragment key={`${c.id}-e-${i}`}>
@@ -1758,21 +1781,43 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
 
   function exportBatchCsv(batch) {
     const items = earnings.filter(e => e.payment_batch_id === batch.id)
-    const byContractor = {}
+    // Group by contractor → by case, summing amounts and collecting the eval types.
+    const byContractor = new Map()
     for (const e of items) {
-      byContractor[e.contractor_id] = byContractor[e.contractor_id] || []
-      byContractor[e.contractor_id].push(e)
+      if (!byContractor.has(e.contractor_id)) byContractor.set(e.contractor_id, new Map())
+      const caseMap = byContractor.get(e.contractor_id)
+      const a = assignmentById.get(e.assignment_id)
+      const caseKey = a?.Cases?.id ?? a?.case_id ?? `a${e.assignment_id}`
+      if (!caseMap.has(caseKey)) caseMap.set(caseKey, { a, evals: [], amount: 0 })
+      const row = caseMap.get(caseKey)
+      if (a?.eval_type) row.evals.push(a.eval_type)
+      row.amount += Number(e.amount || 0)
     }
-    const lines = [['Contractor', 'Email', 'Evaluations', 'Total Amount', 'Cases'].join(',')]
-    for (const [cid, list] of Object.entries(byContractor)) {
+
+    const csv = v => `"${String(v ?? '').replace(/"/g, '""')}"`
+    const header = ['Contractor', 'Email', 'Student', 'School District', 'Case #', 'Evaluations', 'Amount', 'School District Payment Received']
+    const lines = [header.map(csv).join(',')]
+    let grandTotal = 0, caseCount = 0
+    const contractorIds = [...byContractor.keys()].sort((x, y) =>
+      (contractorById.get(Number(x))?.name || '').localeCompare(contractorById.get(Number(y))?.name || ''))
+    for (const cid of contractorIds) {
       const k = contractorById.get(Number(cid))
-      const total = list.reduce((n, e) => n + Number(e.amount || 0), 0)
-      const caseList = list.map(e => {
-        const a = assignmentById.get(e.assignment_id)
-        return `${a?.Cases?.case_number || e.assignment_id} (${a?.eval_type || ''})`
-      }).join('; ')
-      lines.push([`"${k?.name || 'Unknown'}"`, k?.email || '', list.length, total, `"${caseList}"`].join(','))
+      const caseRows = [...byContractor.get(cid).values()].sort((r1, r2) =>
+        (r1.a?.Cases?.case_number || '').localeCompare(r2.a?.Cases?.case_number || ''))
+      for (const r of caseRows) {
+        const kase = r.a?.Cases || {}
+        const evalTypes = [...new Set(r.evals.map(t => t.trim()).filter(Boolean))].join(', ')
+        lines.push([
+          csv(k?.name || 'Unknown'), csv(k?.email || ''), csv(kase.Student_name || ''),
+          csv(kase.School_district || ''), csv(kase.case_number || ''), csv(evalTypes),
+          r.amount, csv(kase.district_paid ? 'Yes' : 'No'),
+        ].join(','))
+        grandTotal += r.amount; caseCount += 1
+      }
     }
+    // Subtotal: number of cases + total owed to contractors.
+    lines.push([csv('TOTAL'), '', '', '', '', csv(`${caseCount} case${caseCount === 1 ? '' : 's'}`), grandTotal, ''].join(','))
+
     const blob = new Blob([lines.join('\n')], { type: 'text/csv' })
     const url = URL.createObjectURL(blob)
     const el = document.createElement('a')
