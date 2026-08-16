@@ -3,10 +3,13 @@ import { supabase } from './supabase.js'
 import Login from './Login.jsx'
 import ContractorPortal from './ContractorPortal.jsx'
 import AdminPortal from './AdminPortal.jsx'
+import TwoFactor, { isMfaVerified, clearMfaVerified } from './TwoFactor.jsx'
 
 export default function App() {
   const [session, setSession] = useState(undefined) // undefined = loading
   const [role, setRole] = useState(null) // { isAdmin, contractor }
+  const [mfaOk, setMfaOk] = useState(false)
+  const [mfaChecked, setMfaChecked] = useState(false)
   // Invite and password-recovery links land with type=invite / type=recovery in
   // the URL hash — show the set-password screen before entering the portal.
   const [needsPassword, setNeedsPassword] = useState(() => /type=(invite|recovery)/.test(window.location.hash))
@@ -16,6 +19,7 @@ export default function App() {
     const { data: sub } = supabase.auth.onAuthStateChange((event, s) => {
       setSession(s)
       if (event === 'PASSWORD_RECOVERY') setNeedsPassword(true)
+      if (event === 'SIGNED_OUT') { clearMfaVerified(); setMfaOk(false); setMfaChecked(false) }
     })
     return () => sub.subscription.unsubscribe()
   }, [])
@@ -34,13 +38,36 @@ export default function App() {
     return () => { cancelled = true }
   }, [session])
 
+  // Determine whether 2FA has been satisfied this session. Contractors are gated;
+  // a session already elevated to aal2 (authenticator app) or flagged after an
+  // email code counts as verified. Admins are not gated (yet).
+  useEffect(() => {
+    if (!session || !role) { setMfaChecked(false); return }
+    if (role.isAdmin || !role.contractor) { setMfaOk(true); setMfaChecked(true); return }
+    let cancelled = false
+    async function check() {
+      let aal2 = false
+      try {
+        const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
+        aal2 = data?.currentLevel === 'aal2'
+      } catch { /* treat as not elevated */ }
+      if (!cancelled) { setMfaOk(aal2 || isMfaVerified(session.user.id)); setMfaChecked(true) }
+    }
+    check()
+    return () => { cancelled = true }
+  }, [session, role])
+
   if (session === undefined) return <div className="login-wrap" />
   if (session && needsPassword) return <SetPassword onDone={() => setNeedsPassword(false)} />
   if (!session) return <Login />
   if (!role) return <div className="login-wrap" />
 
   if (role.isAdmin) return <AdminPortal user={session.user} />
-  if (role.contractor) return <ContractorPortal user={session.user} contractor={role.contractor} />
+  if (role.contractor) {
+    if (!mfaChecked) return <div className="login-wrap" />
+    if (!mfaOk) return <TwoFactor user={session.user} onVerified={() => setMfaOk(true)} />
+    return <ContractorPortal user={session.user} contractor={role.contractor} />
+  }
 
   return (
     <div className="login-wrap">
