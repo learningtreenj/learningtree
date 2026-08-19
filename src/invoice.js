@@ -73,7 +73,8 @@ function invoiceHtml(data) {
 <p>Green Brook, NJ 08812</p>
 <p>Phone: (908) 754-8593 &nbsp;&nbsp;&nbsp; E-mail: office@learningtreenj.org</p>
 <div class="rule"></div>
-<p style="margin-bottom:8pt"><b>SERVICE FOR:</b> &nbsp;&nbsp; ${esc(data.studentName)}</p>
+<p><b>SERVICE FOR:</b> &nbsp;&nbsp; ${esc(data.studentName)}</p>
+<p style="margin-bottom:8pt"><b>Language:</b> &nbsp;&nbsp; ${esc(data.language || '')}</p>
 <p><b>BILL TO:</b> &nbsp; ${esc(data.districtName)}</p>
 <p style="margin-bottom:8pt;padding-left:54pt">Special Services Department</p>
 <p><b>Provider:</b> &nbsp; Learning Tree</p>
