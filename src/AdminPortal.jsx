@@ -1748,6 +1748,9 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
   const [busy, setBusy] = useState(false)
   const contractorById = useMemo(() => new Map(contractors.map(k => [k.identifier, k])), [contractors])
   const assignmentById = useMemo(() => new Map(assignments.map(a => [a.id, a])), [assignments])
+  const batchById = useMemo(() => new Map(batches.map(b => [b.id, b])), [batches])
+  // Batch month is stored as YYYY-MM; show it as MM/YYYY.
+  const monthMMYYYY = ym => { const [y, m] = String(ym || '').split('-'); return (m && y) ? `${m}/${y}` : (ym || '—') }
 
   const unbatched = earnings.filter(e => e.status === 'pending' && !e.payment_batch_id)
   const unbatchedTotal = unbatched.reduce((n, e) => n + Number(e.amount || 0), 0)
@@ -1871,7 +1874,7 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
         <div className="card-title">All Earnings ({earnings.length})</div>
         <div className="tbl-wrap">
           <table>
-            <thead><tr><th>Contractor</th><th>Case</th><th>Eval Type</th><th>Date</th><th>Amount</th><th>Status</th><th>Batch</th></tr></thead>
+            <thead><tr><th>Contractor</th><th>Case</th><th>Eval Type</th><th>Date</th><th>Amount</th><th>Status</th><th>Invoice Month</th></tr></thead>
             <tbody>
               {earnings.length === 0 && <tr><td colSpan={7} style={{ color: '#888' }}>No earnings yet — approve submitted reports in Report Review to create them.</td></tr>}
               {earnings.map(e => {
@@ -1885,7 +1888,7 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
                     <td>{fmtDate(e.billable_date)}</td>
                     <td>${Number(e.amount || 0).toLocaleString()}</td>
                     <td><Badge status={e.status} /></td>
-                    <td>{e.payment_batch_id ? `#${e.payment_batch_id}` : '—'}</td>
+                    <td>{e.payment_batch_id ? monthMMYYYY(batchById.get(e.payment_batch_id)?.batch_month) : '—'}</td>
                   </tr>
                 )
               })}
