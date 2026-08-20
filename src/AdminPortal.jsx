@@ -3,6 +3,7 @@ import { supabase, fetchAll, STATUSES, fmtDate, daysLeft, dueColor, parseRate, t
 import { Shell, Badge, StatCard, Meta } from './ui.jsx'
 import { generateInvoiceDoc, RATE_PER_EVAL } from './invoice.js'
 import { getRate, invalidateRates } from './rates.js'
+import DistrictHeatmap from './DistrictHeatmap.jsx'
 import { scoreContractors } from './smartAssign.js'
 import { extractTextFromFile } from './extractDocumentText.js'
 import { exportCasesToExcel } from './exportExcel.js'
@@ -342,6 +343,7 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
         <StatCard num={completedThisMonth} label="Submitted This Month" color="green" />
         <StatCard num={awaiting} label="Awaiting Reports" color="orange" />
       </div>
+      <DistrictHeatmap cases={cases} />
       <div className="card">
         <div className="card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
           <span>Upcoming Due Dates</span>
