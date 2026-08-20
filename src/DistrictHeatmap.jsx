@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react'
 
-// Case-volume heatmap for the admin dashboard. Two views (toggle): a color-intensity
-// tile grid, and a geographic New Jersey bubble map. Both are driven by the Cases list.
+// Dashboard insights: case-volume heatmap by district (grid / NJ-map toggle) on the left,
+// a contractor active-caseload snapshot (toggle by language) on the right, and top-5
+// district / language rankings full-width below. All driven by Cases + Assignments.
 
 // NJ outline + projection precomputed from us-atlas states-10m (geoMercator fit to a
 // 340×430 box). The projection is analytic mercator, so any [lon,lat] maps correctly —
@@ -37,12 +38,16 @@ const TILE_DARK = '#185FA5', TILE_MID = '#378ADD', TILE_LIGHT = '#B5D4F4'
 function fillFor(n, max) { const r = max ? n / max : 0; return r >= 0.67 ? TILE_DARK : r >= 0.34 ? TILE_MID : TILE_LIGHT }
 function inkFor(n, max) { const r = max ? n / max : 0; return r >= 0.34 ? '#ffffff' : '#0C447C' }
 
-export default function DistrictHeatmap({ cases = [] }) {
+// Fixed categorical palette for language colors (assigned in stable sorted order).
+const CAT = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#4a3aa7', '#e34948']
+
+export default function DistrictHeatmap({ cases = [], assignments = [] }) {
   const [view, setView] = useState('grid')
 
-  const { districts, languages, total, unmapped } = useMemo(() => {
-    const dc = new Map(), lc = new Map()
+  const { districts, languages, total, unmapped, completeIds } = useMemo(() => {
+    const dc = new Map(), lc = new Map(), completeIds = new Set()
     for (const c of cases) {
+      if (c.sent_to_district_at) completeIds.add(c.id)
       const d = (c.School_district || '').trim()
       if (d) dc.set(d, (dc.get(d) || 0) + 1)
       const l = (c.Language || '').trim()
@@ -51,7 +56,7 @@ export default function DistrictHeatmap({ cases = [] }) {
     const districts = [...dc.entries()].map(([name, n]) => ({ name, n })).sort((a, b) => b.n - a.n || a.name.localeCompare(b.name))
     const languages = [...lc.entries()].map(([name, n]) => ({ name, n })).sort((a, b) => b.n - a.n || a.name.localeCompare(b.name))
     const unmapped = districts.filter(d => !coordsFor(d.name))
-    return { districts, languages, total: cases.length, unmapped }
+    return { districts, languages, total: cases.length, unmapped, completeIds }
   }, [cases])
 
   const dMax = districts[0]?.n || 1
@@ -59,7 +64,7 @@ export default function DistrictHeatmap({ cases = [] }) {
 
   const bar = (name, n, max, color) => (
     <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-      <span style={{ flex: '0 0 110px', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={name}>{name}</span>
+      <span style={{ flex: '0 0 120px', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={name}>{name}</span>
       <span style={{ flex: 1, height: 14, background: 'var(--gray-bg, #eef1f4)', borderRadius: 4, overflow: 'hidden' }}>
         <span style={{ display: 'block', height: '100%', width: `${Math.round((n / max) * 100)}%`, background: color }} />
       </span>
@@ -68,86 +73,192 @@ export default function DistrictHeatmap({ cases = [] }) {
   )
 
   return (
-    <div className="card" style={{ marginBottom: 14 }}>
-      <div className="card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-        <span>Case Volume by School District</span>
-        <div style={{ display: 'flex', gap: 4, fontWeight: 400 }}>
-          <button className={`btn btn-sm ${view === 'grid' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setView('grid')}>▦ Grid</button>
-          <button className={`btn btn-sm ${view === 'map' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setView('map')}>🗺 Map</button>
-        </div>
-      </div>
-
-      {districts.length === 0 && <div style={{ color: '#888', fontSize: 13 }}>No cases with a district yet.</div>}
-
-      {districts.length > 0 && view === 'grid' && (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: 8 }}>
-          {districts.map(d => (
-            <div key={d.name} style={{ background: fillFor(d.n, dMax), color: inkFor(d.n, dMax), borderRadius: 8, padding: '12px 12px 14px' }}>
-              <div style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.25 }}>{d.name}</div>
-              <div style={{ fontSize: 22, fontWeight: 600, marginTop: 6 }}>{d.n}</div>
+    <>
+      <div className="grid-2" style={{ alignItems: 'start', marginBottom: 14 }}>
+        {/* ── Left: case volume by district ── */}
+        <div className="card" style={{ marginBottom: 0 }}>
+          <div className="card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+            <span>Case Volume by District</span>
+            <div style={{ display: 'flex', gap: 4, fontWeight: 400 }}>
+              <button className={`btn btn-sm ${view === 'grid' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setView('grid')}>▦ Grid</button>
+              <button className={`btn btn-sm ${view === 'map' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setView('map')}>🗺 Map</button>
             </div>
-          ))}
-        </div>
-      )}
+          </div>
 
-      {districts.length > 0 && view === 'map' && (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-          <svg viewBox={`0 0 ${MAP_W} ${MAP_H}`} width={MAP_W} height={MAP_H} role="img" aria-label="New Jersey map of case volume by district">
-            <path d={NJ_PATH} fill="var(--gray-bg, #f1efe8)" stroke="var(--border, #d3d1c7)" strokeWidth="1" />
-            {districts.map(d => {
-              const co = coordsFor(d.name); if (!co) return null
-              const [x, y] = project(co[0], co[1])
-              const r = 5 + Math.sqrt(d.n) * 5.5
-              return (
-                <g key={d.name}>
-                  <circle cx={x} cy={y} r={r} fill={fillFor(d.n, dMax)} fillOpacity="0.9" stroke="#fff" strokeWidth="1.2" />
-                  <text x={x} y={y} dy="0.35em" textAnchor="middle" fontSize="11" fontWeight="600" fill={inkFor(d.n, dMax)}>{d.n}</text>
-                </g>
-              )
-            })}
-          </svg>
-          {unmapped.length > 0 && (
-            <div style={{ fontSize: 12, color: '#888', marginTop: 4, textAlign: 'center' }}>
-              Not shown on map (no location on file): {unmapped.map(d => `${d.name} (${d.n})`).join(', ')}
+          {districts.length === 0 && <div style={{ color: '#888', fontSize: 13 }}>No cases with a district yet.</div>}
+
+          {districts.length > 0 && view === 'grid' && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(96px, 1fr))', gap: 7 }}>
+              {districts.map(d => (
+                <div key={d.name} style={{ background: fillFor(d.n, dMax), color: inkFor(d.n, dMax), borderRadius: 8, padding: '10px 10px 12px' }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, lineHeight: 1.2 }}>{d.name}</div>
+                  <div style={{ fontSize: 20, fontWeight: 600, marginTop: 4 }}>{d.n}</div>
+                </div>
+              ))}
             </div>
           )}
+
+          {districts.length > 0 && view === 'map' && (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+              <svg viewBox={`0 0 ${MAP_W} ${MAP_H}`} width="100%" style={{ maxWidth: MAP_W, height: 'auto' }} role="img" aria-label="New Jersey map of case volume by district">
+                <path d={NJ_PATH} fill="var(--gray-bg, #f1efe8)" stroke="var(--border, #d3d1c7)" strokeWidth="1" />
+                {districts.map(d => {
+                  const co = coordsFor(d.name); if (!co) return null
+                  const [x, y] = project(co[0], co[1])
+                  const r = 5 + Math.sqrt(d.n) * 5.5
+                  return (
+                    <g key={d.name}>
+                      <circle cx={x} cy={y} r={r} fill={fillFor(d.n, dMax)} fillOpacity="0.9" stroke="#fff" strokeWidth="1.2" />
+                      <text x={x} y={y} dy="0.35em" textAnchor="middle" fontSize="11" fontWeight="600" fill={inkFor(d.n, dMax)}>{d.n}</text>
+                    </g>
+                  )
+                })}
+              </svg>
+              {unmapped.length > 0 && (
+                <div style={{ fontSize: 12, color: '#888', marginTop: 4, textAlign: 'center' }}>
+                  Not shown on map (no location on file): {unmapped.map(d => `${d.name} (${d.n})`).join(', ')}
+                </div>
+              )}
+            </div>
+          )}
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '10px 0 2px', fontSize: 12, color: '#666' }}>
+            <span>Fewer</span>
+            <span style={{ width: 24, height: 12, borderRadius: 3, background: TILE_LIGHT }} />
+            <span style={{ width: 24, height: 12, borderRadius: 3, background: TILE_MID }} />
+            <span style={{ width: 24, height: 12, borderRadius: 3, background: TILE_DARK }} />
+            <span>More</span>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10, marginTop: 12 }}>
+            <StatMini num={total} label="Total Cases" />
+            <StatMini num={districts.length} label="Districts" />
+            <StatMini num={languages.length} label="Languages" />
+          </div>
+        </div>
+
+        {/* ── Right: contractor snapshot ── */}
+        <ContractorSnapshot assignments={assignments} completeIds={completeIds} />
+      </div>
+
+      {/* ── Full-width: top-5 rankings ── */}
+      <div className="card" style={{ marginBottom: 14 }}>
+        <div className="grid-2" style={{ alignItems: 'start' }}>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#555', marginBottom: 10 }}>Top 5 districts by volume</div>
+            {districts.slice(0, 5).map(d => bar(d.name, d.n, dMax, TILE_DARK))}
+            {districts.length === 0 && <div style={{ color: '#888', fontSize: 13 }}>No district data yet.</div>}
+          </div>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#555', marginBottom: 10 }}>Top 5 languages by volume</div>
+            {languages.slice(0, 5).map(l => bar(l.name, l.n, lMax, '#1baf7a'))}
+            {languages.length === 0 && <div style={{ color: '#888', fontSize: 13 }}>No language data yet.</div>}
+          </div>
+        </div>
+      </div>
+    </>
+  )
+}
+
+// Active caseload per evaluator, broken down by language, with a language toggle.
+// "Active" = an assignment the evaluator holds that isn't submitted and whose case
+// hasn't been sent to the district.
+function ContractorSnapshot({ assignments = [], completeIds }) {
+  const [active, setActive] = useState('All')
+
+  const { evaluators, langColor, langOrder } = useMemo(() => {
+    const byEval = new Map()
+    const langSet = new Set()
+    for (const a of assignments) {
+      if (a.contractor_id == null) continue
+      if ((a.status || '').toLowerCase() === 'submitted') continue
+      if (completeIds && completeIds.has(a.case_id)) continue
+      const name = a.Contractors?.name || `#${a.contractor_id}`
+      const lang = (a.Cases?.Language || '').trim() || '(none)'
+      langSet.add(lang)
+      if (!byEval.has(name)) byEval.set(name, {})
+      const m = byEval.get(name)
+      m[lang] = (m[lang] || 0) + 1
+    }
+    const langOrder = [...langSet].sort((a, b) => a.localeCompare(b))
+    const langColor = {}
+    langOrder.forEach((l, i) => { langColor[l] = CAT[i % CAT.length] })
+    const evaluators = [...byEval.entries()].map(([name, byLang]) => ({
+      name, byLang, total: Object.values(byLang).reduce((s, n) => s + n, 0),
+    }))
+    return { evaluators, langColor, langOrder }
+  }, [assignments, completeIds])
+
+  const rows = evaluators
+    .map(e => ({ ...e, shown: active === 'All' ? e.total : (e.byLang[active] || 0) }))
+    .filter(r => r.shown > 0)
+    .sort((a, b) => b.shown - a.shown || a.name.localeCompare(b.name))
+  const max = Math.max(1, ...rows.map(r => r.shown))
+  const activeTotal = rows.reduce((s, r) => s + r.shown, 0)
+
+  const chip = (label, color) => {
+    const on = active === label
+    return (
+      <span key={label} onClick={() => setActive(label)}
+        style={{
+          cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12,
+          padding: '4px 10px', borderRadius: 999, border: `1px solid ${on ? '#185FA5' : 'var(--border, #dfe3e8)'}`,
+          background: on ? '#E6F1FB' : 'transparent', color: on ? '#185FA5' : '#666',
+        }}>
+        {color && <span style={{ width: 8, height: 8, borderRadius: 2, background: color, display: 'inline-block' }} />}
+        {label}
+      </span>
+    )
+  }
+
+  return (
+    <div className="card" style={{ marginBottom: 0 }}>
+      <div className="card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span>Contractor Snapshot</span>
+        <span style={{ fontSize: 12, color: '#888', fontWeight: 400 }}>{activeTotal} active {activeTotal === 1 ? 'case' : 'cases'}</span>
+      </div>
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+        {chip('All', null)}
+        {langOrder.map(l => chip(l, langColor[l]))}
+      </div>
+
+      {rows.length === 0 && (
+        <div style={{ color: '#888', fontSize: 13 }}>
+          {evaluators.length === 0 ? 'No active caseloads right now.' : `No active cases in ${active}.`}
         </div>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '10px 0 2px', fontSize: 12, color: '#666' }}>
-        <span>Fewer</span>
-        <span style={{ width: 26, height: 12, borderRadius: 3, background: TILE_LIGHT }} />
-        <span style={{ width: 26, height: 12, borderRadius: 3, background: TILE_MID }} />
-        <span style={{ width: 26, height: 12, borderRadius: 3, background: TILE_DARK }} />
-        <span>More</span>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, margin: '14px 0' }}>
-        <StatMini num={total} label="Total Cases" />
-        <StatMini num={districts.length} label="School Districts" />
-        <StatMini num={languages.length} label="Languages" />
-      </div>
-
-      <div className="grid-2" style={{ alignItems: 'start' }}>
-        <div>
-          <div style={{ fontSize: 13, fontWeight: 600, color: '#555', marginBottom: 10 }}>Top 5 districts by volume</div>
-          {districts.slice(0, 5).map(d => bar(d.name, d.n, dMax, TILE_DARK))}
-        </div>
-        <div>
-          <div style={{ fontSize: 13, fontWeight: 600, color: '#555', marginBottom: 10 }}>Top 5 languages by volume</div>
-          {languages.slice(0, 5).map(l => bar(l.name, l.n, lMax, '#1baf7a'))}
-          {languages.length === 0 && <div style={{ color: '#888', fontSize: 13 }}>No language data yet.</div>}
-        </div>
-      </div>
+      {rows.map(({ name, byLang, shown }) => {
+        const segs = active === 'All' ? Object.entries(byLang) : [[active, byLang[active] || 0]]
+        return (
+          <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
+            <span style={{ flex: '0 0 30px', height: 30, borderRadius: '50%', background: '#E6F1FB', color: '#185FA5', fontSize: 11, fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              {name.split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase()}
+            </span>
+            <span style={{ flex: 1, minWidth: 0 }}>
+              <span style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginBottom: 4 }}>
+                <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name}</span>
+                <span style={{ fontWeight: 600, marginLeft: 8 }}>{shown}</span>
+              </span>
+              <span style={{ display: 'flex', height: 12, background: 'var(--gray-bg, #eef1f4)', borderRadius: 4, overflow: 'hidden' }}>
+                {segs.map(([l, n]) => (
+                  <span key={l} title={`${l}: ${n}`} style={{ display: 'block', height: '100%', width: `${Math.round((n / max) * 100)}%`, background: langColor[l] || '#888' }} />
+                ))}
+              </span>
+            </span>
+          </div>
+        )
+      })}
     </div>
   )
 }
 
 function StatMini({ num, label }) {
   return (
-    <div style={{ background: 'var(--gray-bg, #f4f6f8)', borderRadius: 8, padding: '12px 14px' }}>
-      <div style={{ fontSize: 13, color: '#666', marginBottom: 4 }}>{label}</div>
-      <div style={{ fontSize: 26, fontWeight: 700 }}>{num}</div>
+    <div style={{ background: 'var(--gray-bg, #f4f6f8)', borderRadius: 8, padding: '10px 12px' }}>
+      <div style={{ fontSize: 12, color: '#666', marginBottom: 3 }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 700 }}>{num}</div>
     </div>
   )
 }

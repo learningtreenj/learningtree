@@ -343,7 +343,7 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
         <StatCard num={completedThisMonth} label="Submitted This Month" color="green" />
         <StatCard num={awaiting} label="Awaiting Reports" color="orange" />
       </div>
-      <DistrictHeatmap cases={cases} />
+      <DistrictHeatmap cases={cases} assignments={assignments} />
       <div className="card">
         <div className="card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
           <span>Upcoming Due Dates</span>
