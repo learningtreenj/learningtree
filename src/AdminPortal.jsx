@@ -68,6 +68,18 @@ function abbrevEvals(str) {
   return (str || '').split(',').map(t => abbrevEval(t.trim())).filter(Boolean).join(', ')
 }
 
+// Fixed evaluation-type columns for the Cases table. Everything that isn't one of the
+// four standard types (OT, PT, etc.) buckets into "Other".
+const EVAL_COLS = ['Psych', 'Sp.', 'Ed.', 'Soc.', 'Other']
+function evalCol(t) {
+  const s = (t || '').toLowerCase()
+  if (s.includes('psych')) return 'Psych'
+  if (s.includes('speech') || s.includes('language')) return 'Sp.'
+  if (s.includes('educ')) return 'Ed.'
+  if (s.includes('social')) return 'Soc.'
+  return 'Other'
+}
+
 // Build one expanded sub-row per requested eval type: matched assignment (evaluator + status) or unassigned
 function buildEvalBreakdown(caseRow, asgs) {
   const requested = (caseRow.evaluation_type || '').split(',').map(t => t.trim()).filter(Boolean)
@@ -739,6 +751,55 @@ function NewReferral({ onCreated }) {
   )
 }
 
+function contractorOptLabel(k) {
+  const spec = [k.field, [k.language, k.language_2].filter(Boolean).join('/')].filter(Boolean)
+  return k.name + (spec.length ? ` — ${spec.join(' · ')}` : '')
+}
+
+// Click-to-edit popover for one eval-type cell: reassign/remove existing evaluators,
+// or assign one to a requested-but-empty eval. Positioned at the click point (fixed).
+function CellEditor({ anchor, caseRow, col, token, cellAsg, contractors, busy, onReassign, onRemove, onAssign, onClose }) {
+  const [addTo, setAddTo] = useState('')
+  const [reSel, setReSel] = useState({})
+  const left = Math.max(8, Math.min(anchor.x, (typeof window !== 'undefined' ? window.innerWidth : 1000) - 320))
+  const top = Math.max(8, Math.min(anchor.y, (typeof window !== 'undefined' ? window.innerHeight : 800) - 300))
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 49 }} />
+      <div onClick={e => e.stopPropagation()} style={{ position: 'fixed', left, top, zIndex: 50, background: '#fff', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 8px 28px rgba(0,0,0,.22)', padding: 12, width: 300, fontSize: 13 }}>
+        <div style={{ fontWeight: 700, marginBottom: 6 }}>{caseRow.case_number || caseRow.id} · {col}</div>
+        {cellAsg.length === 0 && <div style={{ color: '#888', marginBottom: 4 }}>No evaluator assigned yet.</div>}
+        {cellAsg.map(a => {
+          const sub = (a.status || '').toLowerCase() === 'submitted'
+          return (
+            <div key={a.id} style={{ borderTop: '1px solid var(--border)', paddingTop: 8, marginTop: 8 }}>
+              <div style={{ marginBottom: 5 }}>{a.Contractors?.name || 'Assigned'} {sub && <span style={{ color: '#1a7a3c' }}>· submitted</span>}</div>
+              <select value={reSel[a.id] ?? String(a.contractor_id ?? '')} onChange={e => setReSel(p => ({ ...p, [a.id]: e.target.value }))} style={{ width: '100%', padding: '5px 6px' }}>
+                {contractors.map(k => <option key={k.identifier} value={k.identifier}>{contractorOptLabel(k)}</option>)}
+              </select>
+              <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => onReassign(a, reSel[a.id] ?? a.contractor_id)}>Reassign</button>
+                <button className="btn btn-danger-outline btn-sm" disabled={busy} onClick={() => onRemove(a)}>Remove</button>
+              </div>
+            </div>
+          )
+        })}
+        {token && (
+          <div style={{ borderTop: '1px solid var(--border)', paddingTop: 8, marginTop: 8 }}>
+            <div style={{ marginBottom: 5, color: '#555' }}>{cellAsg.length ? 'Add another for' : 'Assign'} {col}:</div>
+            <select value={addTo} onChange={e => setAddTo(e.target.value)} style={{ width: '100%', padding: '5px 6px' }}>
+              <option value="">Select contractor…</option>
+              {contractors.map(k => <option key={k.identifier} value={k.identifier}>{contractorOptLabel(k)}</option>)}
+            </select>
+            <button className="btn btn-primary btn-sm" style={{ marginTop: 6 }} disabled={busy || !addTo} onClick={() => onAssign(token, addTo)}>Assign &amp; notify</button>
+          </div>
+        )}
+        <div style={{ textAlign: 'right', marginTop: 8 }}><span className="tbl-link" style={{ fontSize: 12 }} onClick={onClose}>Close</span></div>
+      </div>
+    </>
+  )
+}
+
 // Yes (green) / No (light red) toggle styling for the "District Paid" column.
 function paidBtnStyle(isYes, active) {
   const base = { border: '1px solid', borderRadius: 5, padding: '3px 11px', fontSize: 12, fontWeight: 700, cursor: 'pointer' }
@@ -818,6 +879,47 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
     onChanged && onChanged(); setRowBusy(false)
   }
 
+  // ── Click-to-edit eval cell ──
+  const [editCell, setEditCell] = useState(null) // { caseRow, col, token, cellAsg, x, y }
+
+  async function reassignInline(a, toId) {
+    if (!toId) { setRowMsg({ kind: 'warn', text: 'Pick a contractor.' }); return }
+    if (String(toId) === String(a.contractor_id)) { setEditCell(null); return }
+    setRowBusy(true); setRowMsg(null)
+    const { error } = await supabase.from('Assignments').update({
+      contractor_id: Number(toId), acceptance_status: 'pending', accepted_at: null, declined_at: null, decline_reason: null, status: 'Assigned',
+    }).eq('id', a.id)
+    if (error) { setRowMsg({ kind: 'danger', text: error.message }); setRowBusy(false); return }
+    let text = 'Assignment reassigned.'
+    try { const { data: em } = await supabase.functions.invoke('notify-assignment', { body: { assignment_id: a.id } }); if (em?.success && em.sent_to) text = `Reassigned — emailed ${em.sent_to}.` } catch { /* email best-effort */ }
+    setEditCell(null); setRowMsg({ kind: 'success', text }); onChanged && onChanged(); setRowBusy(false)
+  }
+
+  async function removeInline(a) {
+    if (!window.confirm(`Remove ${a.Contractors?.name || 'this evaluator'} from ${a.eval_type || 'this evaluation'}? Deletes just this assignment, not the case.`)) return
+    setRowBusy(true); setRowMsg(null)
+    const { error } = await supabase.rpc('admin_delete_assignment', { p_assignment_id: a.id })
+    if (error) { setRowMsg({ kind: 'danger', text: error.message }); setRowBusy(false); return }
+    setEditCell(null); setRowMsg({ kind: 'success', text: 'Assignment removed.' }); onChanged && onChanged(); setRowBusy(false)
+  }
+
+  async function assignInline(caseRow, evalToken, toId) {
+    if (!toId) { setRowMsg({ kind: 'warn', text: 'Pick a contractor.' }); return }
+    setRowBusy(true); setRowMsg(null)
+    const { data: inserted, error } = await supabase.from('Assignments').insert({
+      case_id: caseRow.id, contractor_id: Number(toId), eval_type: evalToken,
+      report_due_date: caseRow.Report_Due_date || null, status: 'Assigned', acceptance_status: 'pending',
+    }).select('id').single()
+    if (error) { setRowMsg({ kind: 'danger', text: error.message }); setRowBusy(false); return }
+    let text = 'Contractor assigned — notification emailed.'
+    try {
+      const { data: em } = await supabase.functions.invoke('notify-assignment', { body: { assignment_id: inserted.id } })
+      if (em?.skipped_no_email) text = 'Assigned. No email on file, so no notice was sent.'
+      else if (em?.sent_to) text = `Assigned — emailed ${em.sent_to}.`
+    } catch { /* email best-effort */ }
+    setEditCell(null); setRowMsg({ kind: 'success', text }); onChanged && onChanged(); setRowBusy(false)
+  }
+
   // ── Per-column sort + filter ──
   const [sortCol, setSortCol] = useState(null)
   const [sortDir, setSortDir] = useState('asc')
@@ -831,24 +933,28 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
     return () => document.removeEventListener('click', h)
   }, [openMenu])
 
-  const COLS = [
-    ['case_number', 'Case #'], ['Student_name', 'Student'], ['School_district', 'District'],
-    ['evaluation_type', 'Eval Types'], ['Report_Due_date', 'Due Date'], ['assignments', 'Assignments'], ['status', 'Status'], ['district_paid', 'District Paid'],
-  ]
-  // District + Eval Types + Status filter by multi-select checkboxes of the distinct values
-  const CHECKBOX_COLS = { School_district: true, evaluation_type: true, status: true }
+  // Non-eval columns keep the sort/filter menus. Eval types are their own fixed columns.
+  const LEFT_COLS = [['case_number', 'Case #'], ['Student_name', 'Student'], ['School_district', 'District']]
+  const RIGHT_COLS = [['Report_Due_date', 'Due Date'], ['status', 'Status'], ['district_paid', 'District Paid']]
+  const CHECKBOX_COLS = { School_district: true, status: true }
   const districtOptions = useMemo(() => [...new Set(cases.map(c => (c.School_district || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [cases])
-  const evalOptions = useMemo(() => {
-    const s = new Set()
-    for (const c of cases) for (const t of (c.evaluation_type || '').split(',').map(x => x.trim()).filter(Boolean)) s.add(t)
-    return [...s].sort((a, b) => a.localeCompare(b))
-  }, [cases])
-  const statusOptions = useMemo(() => {
-    const s = new Set()
-    for (const c of cases) s.add(caseStatusLabel(c, byCase[c.id] || []))
-    return [...s].sort((a, b) => a.localeCompare(b))
-  }, [cases, byCase])
-  const optionsFor = key => key === 'School_district' ? districtOptions : key === 'evaluation_type' ? evalOptions : statusOptions
+  // Case-level status is now just In Progress / Complete (Complete = all reports received).
+  const caseProgressText = (c, asg) => {
+    const lbl = caseStatusLabel(c, asg)
+    return (lbl === 'Report Received' || lbl === 'Complete') ? 'Complete' : 'In Progress'
+  }
+  const statusOptions = ['In Progress', 'Complete']
+  const optionsFor = key => key === 'School_district' ? districtOptions : statusOptions
+  // Contents of one eval-type cell for a case: matching assignments + the requested token.
+  const cellFor = (c, col) => {
+    const asg = (byCase[c.id] || []).filter(a => evalCol(a.eval_type) === col)
+    const token = (c.evaluation_type || '').split(',').map(t => t.trim()).filter(Boolean).find(t => evalCol(t) === col) || asg[0]?.eval_type || null
+    return { asg, token }
+  }
+  // Per-evaluator status label shown inside an eval cell.
+  const evalStatus = a => (a.status || '').toLowerCase() === 'submitted'
+    ? { t: "Report Rec'd", cls: 's-completed' }
+    : { t: 'Assigned', cls: 's-assigned' }
   const toggleCheck = (key, val) => setColChecks(p => {
     const cur = new Set(p[key] || [])
     cur.has(val) ? cur.delete(val) : cur.add(val)
@@ -859,7 +965,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
     switch (col) {
       case 'Report_Due_date': return c.Report_Due_date || ''       // ISO date sorts lexically
       case 'assignments': return asg.length                        // numeric
-      case 'status': return caseStatusLabel(c, asg).toLowerCase()
+      case 'status': return caseProgressText(c, asg).toLowerCase()
       case 'district_paid': return c.district_paid ? 'yes' : 'no'
       case 'case_number': return (c.case_number || '').toLowerCase()
       case 'Student_name': return (c.Student_name || '').toLowerCase()
@@ -888,7 +994,8 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
       const caseSoon = (() => { const n = daysLeft(c.Report_Due_date); return n !== null && n <= 7 })()
       if (!soon && !caseSoon) return false
     }
-    const hay = `${c.case_number || ''} ${c.Student_name || ''} ${c.School_district || ''} ${c.evaluation_type || ''}`.toLowerCase()
+    const evalNames = (byCase[c.id] || []).map(a => `${a.eval_type || ''} ${a.Contractors?.name || ''}`).join(' ')
+    const hay = `${c.case_number || ''} ${c.Student_name || ''} ${c.School_district || ''} ${c.evaluation_type || ''} ${evalNames}`.toLowerCase()
     return hay.includes(q.toLowerCase())
   })
   for (const [key, text] of Object.entries(colFilters)) {
@@ -898,13 +1005,8 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
   }
   const distSel = colChecks.School_district || []
   if (distSel.length) rows = rows.filter(c => distSel.includes((c.School_district || '').trim()))
-  const evalSel = colChecks.evaluation_type || []
-  if (evalSel.length) rows = rows.filter(c => {
-    const toks = (c.evaluation_type || '').split(',').map(t => t.trim())
-    return evalSel.some(v => toks.includes(v))
-  })
   const statusSel = colChecks.status || []
-  if (statusSel.length) rows = rows.filter(c => statusSel.includes(caseStatusLabel(c, byCase[c.id] || [])))
+  if (statusSel.length) rows = rows.filter(c => statusSel.includes(caseProgressText(c, byCase[c.id] || [])))
   if (sortCol) {
     rows = [...rows].sort((a, b) => {
       const va = colSortVal(sortCol, a), vb = colSortVal(sortCol, b)
@@ -912,6 +1014,45 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
       return sortDir === 'desc' ? -cmp : cmp
     })
   }
+
+  // A sortable/filterable header cell (used for the non-eval columns).
+  const menuTh = (key, label) => (
+    <th key={key} style={{ position: 'relative', whiteSpace: 'nowrap' }}>
+      <span style={{ cursor: 'pointer', userSelect: 'none' }}
+        onClick={e => { e.stopPropagation(); setOpenMenu(openMenu === key ? null : key) }}>
+        {label}{sortCol === key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}{(colFilters[key]?.trim() || (colChecks[key] || []).length) ? ' •' : ''} <span style={{ color: 'var(--muted)' }}>▾</span>
+      </span>
+      {openMenu === key && (
+        <div onClick={e => e.stopPropagation()}
+          style={{ position: 'absolute', top: '100%', left: 0, zIndex: 20, background: '#fff', border: '1px solid var(--border)', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.18)', padding: 8, minWidth: 200, textAlign: 'left', textTransform: 'none', letterSpacing: 0, fontWeight: 400 }}>
+          <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
+            <button className="btn btn-ghost btn-sm" onClick={() => { setSortCol(key); setSortDir('asc') }}>↑ Ascending</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => { setSortCol(key); setSortDir('desc') }}>↓ Descending</button>
+          </div>
+          {CHECKBOX_COLS[key] ? (
+            <div style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 5, padding: '4px 6px' }}>
+              {optionsFor(key).length === 0 && <div style={{ fontSize: 12, color: '#888' }}>No values</div>}
+              {optionsFor(key).map(opt => (
+                <label key={opt} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, padding: '2px 0', cursor: 'pointer' }}>
+                  <input type="checkbox" checked={(colChecks[key] || []).includes(opt)} onChange={() => toggleCheck(key, opt)} /> {opt}
+                </label>
+              ))}
+            </div>
+          ) : (
+            <input type="text" autoFocus placeholder="Filter text…" value={colFilters[key] || ''}
+              onChange={e => setColFilters(p => ({ ...p, [key]: e.target.value }))}
+              onKeyDown={e => { if (e.key === 'Enter') setOpenMenu(null) }}
+              style={{ width: '100%', padding: '5px 8px', fontSize: 13, border: '1px solid var(--border)', borderRadius: 5 }} />
+          )}
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6 }}>
+            <span className="tbl-link" style={{ fontSize: 12 }} onClick={() => { setColFilters(p => ({ ...p, [key]: '' })); setColChecks(p => ({ ...p, [key]: [] })); if (sortCol === key) setSortCol(null) }}>Clear</span>
+            <span className="tbl-link" style={{ fontSize: 12 }} onClick={() => setOpenMenu(null)}>Close</span>
+          </div>
+        </div>
+      )}
+    </th>
+  )
+  const COLSPAN = LEFT_COLS.length + EVAL_COLS.length + RIGHT_COLS.length
 
   return (
     <div className="card">
@@ -933,53 +1074,19 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
       <div className="tbl-wrap">
         <table>
           <thead><tr>
-            {COLS.map(([key, label]) => (
-              <th key={key} style={{ position: 'relative', whiteSpace: 'nowrap' }}>
-                <span style={{ cursor: 'pointer', userSelect: 'none' }}
-                  onClick={e => { e.stopPropagation(); setOpenMenu(openMenu === key ? null : key) }}>
-                  {label}{sortCol === key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}{(colFilters[key]?.trim() || (colChecks[key] || []).length) ? ' •' : ''} <span style={{ color: 'var(--muted)' }}>▾</span>
-                </span>
-                {openMenu === key && (
-                  <div onClick={e => e.stopPropagation()}
-                    style={{ position: 'absolute', top: '100%', left: 0, zIndex: 20, background: '#fff', border: '1px solid var(--border)', borderRadius: 6, boxShadow: '0 4px 16px rgba(0,0,0,.18)', padding: 8, minWidth: 200, textAlign: 'left', textTransform: 'none', letterSpacing: 0, fontWeight: 400 }}>
-                    <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
-                      <button className="btn btn-ghost btn-sm" onClick={() => { setSortCol(key); setSortDir('asc') }}>↑ Ascending</button>
-                      <button className="btn btn-ghost btn-sm" onClick={() => { setSortCol(key); setSortDir('desc') }}>↓ Descending</button>
-                    </div>
-                    {CHECKBOX_COLS[key] ? (
-                      <div style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 5, padding: '4px 6px' }}>
-                        {optionsFor(key).length === 0 && <div style={{ fontSize: 12, color: '#888' }}>No values</div>}
-                        {optionsFor(key).map(opt => (
-                          <label key={opt} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, padding: '2px 0', cursor: 'pointer' }}>
-                            <input type="checkbox" checked={(colChecks[key] || []).includes(opt)} onChange={() => toggleCheck(key, opt)} /> {opt}
-                          </label>
-                        ))}
-                      </div>
-                    ) : (
-                      <input type="text" autoFocus placeholder="Filter text…" value={colFilters[key] || ''}
-                        onChange={e => setColFilters(p => ({ ...p, [key]: e.target.value }))}
-                        onKeyDown={e => { if (e.key === 'Enter') setOpenMenu(null) }}
-                        style={{ width: '100%', padding: '5px 8px', fontSize: 13, border: '1px solid var(--border)', borderRadius: 5 }} />
-                    )}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 6 }}>
-                      <span className="tbl-link" style={{ fontSize: 12 }} onClick={() => { setColFilters(p => ({ ...p, [key]: '' })); setColChecks(p => ({ ...p, [key]: [] })); if (sortCol === key) setSortCol(null) }}>Clear</span>
-                      <span className="tbl-link" style={{ fontSize: 12 }} onClick={() => setOpenMenu(null)}>Close</span>
-                    </div>
-                  </div>
-                )}
-              </th>
-            ))}
+            {LEFT_COLS.map(([key, label]) => menuTh(key, label))}
+            {EVAL_COLS.map(col => <th key={col} style={{ whiteSpace: 'nowrap', background: '#f3f6f9', textAlign: 'left' }}>{col}</th>)}
+            {RIGHT_COLS.map(([key, label]) => menuTh(key, label))}
           </tr></thead>
           <tbody>
-            {loading && <tr><td colSpan={8} style={{ color: '#888' }}>Loading…</td></tr>}
-            {!loading && rows.length === 0 && <tr><td colSpan={8} style={{ color: '#888' }}>No cases match.</td></tr>}
+            {loading && <tr><td colSpan={COLSPAN} style={{ color: '#888' }}>Loading…</td></tr>}
+            {!loading && rows.length === 0 && <tr><td colSpan={COLSPAN} style={{ color: '#888' }}>No cases match.</td></tr>}
             {rows.slice(0, 200).map(c => {
               const asg = byCase[c.id] || []
-              const breakdown = expanded[c.id] ? buildEvalBreakdown(c, asg) : null
-              const canExpand = asg.length > 0 || (c.evaluation_type || '').trim().length > 0
               const statusLbl = caseStatusLabel(c, asg)
               const complete = statusLbl === 'Complete'
               const allReceived = statusLbl === 'Report Received' // every evaluation submitted
+              const progress = caseProgressText(c, asg)           // In Progress | Complete
               const dl = daysLeft(c.Report_Due_date)
               const pastDue = !complete && !allReceived && dl !== null && dl < 0 // overdue, reports not all in
               const dueSoon = !complete && !allReceived && dl !== null && dl >= 0 && dl < 7 // not all in, due within a week
@@ -994,90 +1101,55 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
                 : dueSoon ? 'Reports not all in — due within 7 days'
                 : undefined
               return (
-                <Fragment key={c.id}>
-                  <tr style={rowStyle} title={rowTitle}>
-                    <td><span className="tbl-link" onClick={() => onOpen(c)}>{c.case_number || c.id}</span></td>
-                    <td><span className="tbl-link" onClick={() => onOpen(c)}>{c.Student_name || '—'}</span></td>
-                    <td>{c.School_district || '—'}</td>
-                    <td>{c.evaluation_type ? abbrevEvals(c.evaluation_type) : '—'}</td>
-                    <td style={dueColor(c.Report_Due_date)}>{fmtDate(c.Report_Due_date)}</td>
-                    <td>
-                      {asg.length === 0 && !canExpand
-                        ? <span className="badge-s s-unassigned">None</span>
-                        : <span className="tbl-link" title="Show evaluation types & evaluators" onClick={() => toggle(c.id)} style={{ whiteSpace: 'nowrap' }}>
-                            <span style={{ display: 'inline-block', width: 12 }}>{expanded[c.id] ? '▾' : '▸'}</span>
-                            {asg.length === 0 ? 'Unassigned' : `${asg.filter(a => (a.status || '').toLowerCase() === 'submitted').length}/${asg.length} submitted`}
-                          </span>}
-                    </td>
-                    <td><span className={`badge-s ${caseStatusCls(statusLbl)}`}>{statusLbl}</span></td>
-                    <td style={{ whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
-                      <button type="button" disabled={rowBusy} onClick={() => setDistrictPaid(c, true)}
-                        title="School district has paid Learning Tree"
-                        style={paidBtnStyle(true, c.district_paid === true)}>Yes</button>
-                      {' '}
-                      <button type="button" disabled={rowBusy} onClick={() => setDistrictPaid(c, false)}
-                        title="Not yet paid by the school district"
-                        style={paidBtnStyle(false, !c.district_paid)}>No</button>
-                    </td>
-                  </tr>
-                  {expanded[c.id] && breakdown.map((r, i) => (
-                    <Fragment key={`${c.id}-e-${i}`}>
-                      <tr style={{ background: '#f8fafc' }}>
-                        <td></td>
-                        <td></td>
-                        <td></td>
-                        <td style={{ paddingLeft: 24, fontWeight: 600 }}>↳ {abbrevEval(r.evalType)}</td>
-                        <td></td>
-                        <td style={{ whiteSpace: 'nowrap' }}>
-                          {r.evaluator || <span style={{ color: '#888' }}>— not assigned —</span>}
-                          {r.a && <>
-                            {' '}<button className="btn btn-ghost btn-sm" title="Reassign to a different contractor" disabled={rowBusy} onClick={() => startReassign(r.a)}>✏️</button>
-                            {' '}<button className="btn btn-danger-outline btn-sm" title="Remove this assignment" disabled={rowBusy} onClick={() => { setConfirmRemoveId(r.a.id); setReassignId(null); setRowMsg(null) }}>🗑</button>
-                          </>}
-                          {!r.a && <>{' '}<button className="btn btn-danger-outline btn-sm" title="Remove this evaluation type from the case" disabled={rowBusy} onClick={() => removeEvalType(c, r.evalType)}>🗑</button></>}
-                        </td>
-                        <td><span className={`badge-s ${r.status.cls}`}>{r.status.label}</span></td>
-                        <td></td>
-                      </tr>
-                      {r.a && reassignId === r.a.id && (
-                        <tr>
-                          <td colSpan={8} style={{ background: 'var(--accent-light)' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', paddingLeft: 40 }}>
-                              <strong style={{ fontSize: 13 }}>Reassign {r.evalType} to:</strong>
-                              <select value={reassignTo} onChange={e => setReassignTo(e.target.value)} style={{ padding: '6px 10px', minWidth: 240 }}>
-                                <option value="">Select contractor…</option>
-                                {contractors.map(k => (
-                                  <option key={k.identifier} value={k.identifier}>
-                                    {k.name}{[k.field, [k.language, k.language_2].filter(Boolean).join('/')].filter(Boolean).length ? ` — ${[k.field, [k.language, k.language_2].filter(Boolean).join('/')].filter(Boolean).join(' · ')}` : ''}
-                                  </option>
-                                ))}
-                              </select>
-                              <button className="btn btn-primary btn-sm" disabled={rowBusy} onClick={() => saveReassign(r.a)}>Save &amp; notify</button>
-                              <button className="btn btn-ghost btn-sm" disabled={rowBusy} onClick={() => setReassignId(null)}>Cancel</button>
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-                      {r.a && confirmRemoveId === r.a.id && (
-                        <tr>
-                          <td colSpan={8} style={{ background: 'var(--red-bg)' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', paddingLeft: 40 }}>
-                              <span style={{ fontSize: 13, color: 'var(--red)' }}>Remove <strong>{r.evalType}</strong>{r.evaluator ? ` — ${r.evaluator}` : ''}? Deletes just this assignment, not the case.</span>
-                              <button className="btn btn-danger btn-sm" disabled={rowBusy} onClick={() => removeAssignment(r.a)}>Yes, remove</button>
-                              <button className="btn btn-ghost btn-sm" disabled={rowBusy} onClick={() => setConfirmRemoveId(null)}>Cancel</button>
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
-                  ))}
-                </Fragment>
+                <tr key={c.id} style={rowStyle} title={rowTitle}>
+                  <td><span className="tbl-link" onClick={() => onOpen(c)}>{c.case_number || c.id}</span></td>
+                  <td><span className="tbl-link" onClick={() => onOpen(c)}>{c.Student_name || '—'}</span></td>
+                  <td>{c.School_district || '—'}</td>
+                  {EVAL_COLS.map(col => {
+                    const { asg: cAsg, token } = cellFor(c, col)
+                    if (cAsg.length === 0 && !token) return <td key={col} style={{ textAlign: 'center', color: '#c9ccd1' }}>·</td>
+                    return (
+                      <td key={col} style={{ cursor: 'pointer', whiteSpace: 'nowrap', verticalAlign: 'top' }} title="Click to assign / reassign"
+                        onClick={e => { e.stopPropagation(); setEditCell({ caseRow: c, col, token, cellAsg: cAsg, x: e.clientX, y: e.clientY }) }}>
+                        {cAsg.length === 0
+                          ? <span className="badge-s s-unassigned">Pending Assmt</span>
+                          : cAsg.map(a => {
+                              const st = evalStatus(a)
+                              const prefix = col === 'Other' && a.eval_type ? `${a.eval_type}: ` : ''
+                              return (
+                                <div key={a.id} style={{ marginBottom: cAsg.length > 1 ? 4 : 0 }}>
+                                  <div>{prefix}{a.Contractors?.name || 'Assigned'}</div>
+                                  <span className={`badge-s ${st.cls}`} style={{ fontSize: 10 }}>{st.t}</span>
+                                </div>
+                              )
+                            })}
+                      </td>
+                    )
+                  })}
+                  <td style={dueColor(c.Report_Due_date)}>{fmtDate(c.Report_Due_date)}</td>
+                  <td><span className={`badge-s ${progress === 'Complete' ? 's-completed' : 's-drafting'}`}>{progress}</span></td>
+                  <td style={{ whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
+                    <button type="button" disabled={rowBusy} onClick={() => setDistrictPaid(c, true)}
+                      title="School district has paid Learning Tree"
+                      style={paidBtnStyle(true, c.district_paid === true)}>Yes</button>
+                    {' '}
+                    <button type="button" disabled={rowBusy} onClick={() => setDistrictPaid(c, false)}
+                      title="Not yet paid by the school district"
+                      style={paidBtnStyle(false, !c.district_paid)}>No</button>
+                  </td>
+                </tr>
               )
             })}
           </tbody>
         </table>
       </div>
       {rows.length > 200 && <div style={{ marginTop: 8, fontSize: 12, color: '#888' }}>Showing first 200 — refine your search to see more.</div>}
+      {editCell && (
+        <CellEditor anchor={{ x: editCell.x, y: editCell.y }} caseRow={editCell.caseRow} col={editCell.col} token={editCell.token}
+          cellAsg={editCell.cellAsg} contractors={contractors} busy={rowBusy}
+          onReassign={reassignInline} onRemove={removeInline}
+          onAssign={(tok, toId) => assignInline(editCell.caseRow, tok, toId)} onClose={() => setEditCell(null)} />
+      )}
     </div>
   )
 }
