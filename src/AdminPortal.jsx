@@ -54,6 +54,20 @@ function evalTypeStatus(a, caseRow) {
   return { label: 'Assigned', cls: 's-assigned' }
 }
 
+// Short display labels for evaluation types (Cases + Dashboard). Non-standard types
+// (OT, PT, etc.) pass through unchanged.
+function abbrevEval(t) {
+  const s = (t || '').toLowerCase()
+  if (s.includes('psych')) return 'Psych'
+  if (s.includes('speech') || s.includes('language')) return 'Sp.'
+  if (s.includes('educ')) return 'Ed.'
+  if (s.includes('social')) return 'Soc.'
+  return t
+}
+function abbrevEvals(str) {
+  return (str || '').split(',').map(t => abbrevEval(t.trim())).filter(Boolean).join(', ')
+}
+
 // Build one expanded sub-row per requested eval type: matched assignment (evaluator + status) or unassigned
 function buildEvalBreakdown(caseRow, asgs) {
   const requested = (caseRow.evaluation_type || '').split(',').map(t => t.trim()).filter(Boolean)
@@ -425,7 +439,7 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
                     <tr key={g.name}>
                       <td><span className="tbl-link" onClick={() => openCaseById(a.case_id)}>{a.Cases?.case_number || a.case_id}</span></td>
                       <td style={{ fontWeight: 600 }}>{g.name}</td>
-                      <td>{a.eval_type || '—'}</td>
+                      <td>{a.eval_type ? abbrevEval(a.eval_type) : '—'}</td>
                       <td>{a.Contractors?.name || <span className="badge-s s-unassigned">Unassigned</span>}</td>
                       <td style={dueColor(a.report_due_date)}>{fmtDate(a.report_due_date)}</td>
                       <td style={dueColor(a.report_due_date)}>{daysLeft(a.report_due_date) ?? '—'}</td>
@@ -450,7 +464,7 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
                       <tr key={a.id} style={{ background: '#f8fafc' }}>
                         <td></td>
                         <td></td>
-                        <td style={{ paddingLeft: 24 }}><span className="tbl-link" onClick={() => openCaseById(a.case_id)}>↳ {a.Cases?.case_number || a.case_id} · {a.eval_type || '—'}</span></td>
+                        <td style={{ paddingLeft: 24 }}><span className="tbl-link" onClick={() => openCaseById(a.case_id)}>↳ {a.Cases?.case_number || a.case_id} · {a.eval_type ? abbrevEval(a.eval_type) : '—'}</span></td>
                         <td>{a.Contractors?.name || <span className="badge-s s-unassigned">Unassigned</span>}</td>
                         <td style={dueColor(a.report_due_date)}>{fmtDate(a.report_due_date)}</td>
                         <td style={dueColor(a.report_due_date)}>{daysLeft(a.report_due_date) ?? '—'}</td>
@@ -985,7 +999,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
                     <td><span className="tbl-link" onClick={() => onOpen(c)}>{c.case_number || c.id}</span></td>
                     <td><span className="tbl-link" onClick={() => onOpen(c)}>{c.Student_name || '—'}</span></td>
                     <td>{c.School_district || '—'}</td>
-                    <td>{c.evaluation_type || '—'}</td>
+                    <td>{c.evaluation_type ? abbrevEvals(c.evaluation_type) : '—'}</td>
                     <td style={dueColor(c.Report_Due_date)}>{fmtDate(c.Report_Due_date)}</td>
                     <td>
                       {asg.length === 0 && !canExpand
@@ -1012,7 +1026,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
                         <td></td>
                         <td></td>
                         <td></td>
-                        <td style={{ paddingLeft: 24, fontWeight: 600 }}>↳ {r.evalType}</td>
+                        <td style={{ paddingLeft: 24, fontWeight: 600 }}>↳ {abbrevEval(r.evalType)}</td>
                         <td></td>
                         <td style={{ whiteSpace: 'nowrap' }}>
                           {r.evaluator || <span style={{ color: '#888' }}>— not assigned —</span>}
@@ -1947,9 +1961,9 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
         <div className="card-title">All Earnings ({earnings.length})</div>
         <div className="tbl-wrap">
           <table>
-            <thead><tr><th>Contractor</th><th>Case</th><th>Eval Type</th><th>Date</th><th>Amount</th><th>Status</th><th>Invoice Month</th></tr></thead>
+            <thead><tr><th>Contractor</th><th>Case</th><th>Student</th><th>Eval Type</th><th>Date</th><th>Amount</th><th>Status</th><th>Invoice Month</th></tr></thead>
             <tbody>
-              {earnings.length === 0 && <tr><td colSpan={7} style={{ color: '#888' }}>No earnings yet — approve submitted reports in Report Review to create them.</td></tr>}
+              {earnings.length === 0 && <tr><td colSpan={8} style={{ color: '#888' }}>No earnings yet — approve submitted reports in Report Review to create them.</td></tr>}
               {earnings.map(e => {
                 const k = contractorById.get(e.contractor_id)
                 const a = assignmentById.get(e.assignment_id)
@@ -1957,6 +1971,7 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
                   <tr key={e.id}>
                     <td style={{ fontWeight: 600 }}>{k?.name || e.contractor_id}</td>
                     <td>{a?.Cases?.case_number || '—'}</td>
+                    <td>{a?.Cases?.Student_name || '—'}</td>
                     <td>{a?.eval_type || '—'}</td>
                     <td>{fmtDate(e.billable_date)}</td>
                     <td>${Number(e.amount || 0).toLocaleString()}</td>
