@@ -4,6 +4,7 @@ import { Shell, Badge, StatCard, Meta } from './ui.jsx'
 import { generateInvoiceDoc, RATE_PER_EVAL } from './invoice.js'
 import { getRate, invalidateRates } from './rates.js'
 import DistrictHeatmap from './DistrictHeatmap.jsx'
+import { contractorLanguages, contractorSpeaks } from './contractorLangs.js'
 import { scoreContractors } from './smartAssign.js'
 import { extractTextFromFile } from './extractDocumentText.js'
 import { exportCasesToExcel } from './exportExcel.js'
@@ -108,6 +109,7 @@ export default function AdminPortal({ user }) {
   const [batches, setBatches] = useState([])
   const [emailLog, setEmailLog] = useState([])
   const [selectedCase, setSelectedCase] = useState(null)
+  const [contractorLang, setContractorLang] = useState(null) // language filter from dashboard click
   const [loading, setLoading] = useState(true)
 
   async function load() {
@@ -158,19 +160,21 @@ export default function AdminPortal({ user }) {
     <Shell brand="BEval Portal" sub="Admin / Coordinator"
       userName={user.email} userRole="Administrator"
       navSections={nav} active={screen === 'casedetail' ? 'cases' : screen}
-      onNav={id => { setScreen(id); setSelectedCase(null) }}
+      onNav={id => { setScreen(id); setSelectedCase(null); setContractorLang(null) }}
       onLogout={() => supabase.auth.signOut()}
       title={titles[screen]}
       topbarExtra={<button className="btn btn-primary btn-sm" onClick={() => setScreen('referral')}>+ New Referral</button>}>
 
       {screen === 'dashboard' && <Dashboard assignments={assignments} openAssignments={openAssignments} dueThisWeek={dueThisWeek} loading={loading}
-        onOpenCase={c => { setSelectedCase(c); setScreen('casedetail') }} cases={cases} earnings={earnings} />}
+        onOpenCase={c => { setSelectedCase(c); setScreen('casedetail') }} cases={cases} earnings={earnings} contractors={contractors}
+        onLanguage={lang => { setContractorLang(lang); setScreen('contractors') }} />}
       {screen === 'referral' && <NewReferral onCreated={c => { load(); setSelectedCase(c); setScreen('casedetail') }} />}
       {screen === 'cases' && <CaseList cases={cases} assignments={assignments} contractors={contractors} earnings={earnings} batches={batches} loading={loading}
         onOpen={c => { setSelectedCase(c); setScreen('casedetail') }} onChanged={load} />}
       {screen === 'casedetail' && selectedCase && <CaseDetail caseRow={selectedCase} assignments={assignments.filter(a => a.case_id === selectedCase.id)}
         allAssignments={assignments} contractors={contractors} onBack={() => setScreen('cases')} onChanged={load} />}
-      {screen === 'contractors' && <ContractorList contractors={contractors} assignments={assignments} onChanged={load} />}
+      {screen === 'contractors' && <ContractorList contractors={contractors} assignments={assignments} onChanged={load}
+        languageFilter={contractorLang} onClearLanguageFilter={() => setContractorLang(null)} />}
       {screen === 'qa' && <QaQueue assignments={assignments} qaByAssignment={qaByAssignment} earnings={earnings} onChanged={load} />}
       {screen === 'invoices' && <InvoiceList invoices={invoices} cases={cases} onChanged={load} />}
       {screen === 'payroll' && <Payroll assignments={assignments} earnings={earnings} batches={batches} contractors={contractors} onChanged={load} />}
@@ -290,7 +294,48 @@ function RateTable() {
   )
 }
 
-function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, onOpenCase, earnings = [] }) {
+// Total contractors per language across the whole database (a contractor is counted
+// once per distinct language they speak). Clicking a language opens the Contractors
+// page filtered to those who speak it.
+function ContractorsByLanguage({ contractors = [], onLanguage }) {
+  const langs = useMemo(() => {
+    const m = new Map()
+    for (const k of contractors) for (const l of contractorLanguages(k)) m.set(l, (m.get(l) || 0) + 1)
+    return [...m.entries()].map(([name, n]) => ({ name, n })).sort((a, b) => b.n - a.n || a.name.localeCompare(b.name))
+  }, [contractors])
+  const max = langs[0]?.n || 1
+
+  return (
+    <div className="card" style={{ marginBottom: 14 }}>
+      <div className="card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span>Contractors by Language</span>
+        <span style={{ fontSize: 12, color: '#888', fontWeight: 400 }}>{contractors.length} contractors · click to view</span>
+      </div>
+      {langs.length === 0 && <div style={{ color: '#888', fontSize: 13 }}>No contractor language data yet.</div>}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 8 }}>
+        {langs.map(l => {
+          const r = l.n / max
+          const bg = r >= 0.67 ? '#185FA5' : r >= 0.34 ? '#378ADD' : '#B5D4F4'
+          const ink = r >= 0.34 ? '#fff' : '#0C447C'
+          return (
+            <button key={l.name} onClick={() => onLanguage && onLanguage(l.name)}
+              title={`View the ${l.n} contractor${l.n === 1 ? '' : 's'} who speak ${l.name}`}
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, cursor: 'pointer',
+                border: '1px solid var(--border, #e2e6ea)', borderRadius: 8, background: 'var(--gray-bg, #f4f6f8)',
+                padding: '9px 12px', textAlign: 'left', font: 'inherit',
+              }}>
+              <span style={{ fontSize: 13, color: 'var(--text, #222)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{l.name}</span>
+              <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', minWidth: 26, height: 22, padding: '0 7px', borderRadius: 11, background: bg, color: ink, fontSize: 13, fontWeight: 700 }}>{l.n}</span>
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, onOpenCase, earnings = [], contractors = [], onLanguage }) {
   const now = new Date().toISOString().slice(0, 7)
   const completedThisMonth = assignments.filter(a => (a.submitted_at || '').slice(0, 7) === now).length
   const awaiting = openAssignments.filter(a => /testing complet|draft/i.test(a.status || '')).length
@@ -344,6 +389,7 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
         <StatCard num={awaiting} label="Awaiting Reports" color="orange" />
       </div>
       <DistrictHeatmap cases={cases} assignments={assignments} />
+      <ContractorsByLanguage contractors={contractors} onLanguage={onLanguage} />
       <div className="card">
         <div className="card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
           <span>Upcoming Due Dates</span>
@@ -1491,7 +1537,7 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
   )
 }
 
-function ContractorList({ contractors, assignments, onChanged }) {
+function ContractorList({ contractors, assignments, onChanged, languageFilter = null, onClearLanguageFilter }) {
   const [q, setQ] = useState('')
   const [msg, setMsg] = useState(null)
   const [inviting, setInviting] = useState(null)
@@ -1576,8 +1622,10 @@ function ContractorList({ contractors, assignments, onChanged }) {
     return m
   }, [assignments])
 
-  const rows = contractors.filter(k =>
-    `${k.name || ''} ${k.email || ''} ${k.field || ''} ${k.language || ''} ${k.language_2 || ''} ${k.county || ''}`.toLowerCase().includes(q.toLowerCase()))
+  const rows = contractors
+    .filter(k => !languageFilter || contractorSpeaks(k, languageFilter))
+    .filter(k =>
+      `${k.name || ''} ${k.email || ''} ${k.field || ''} ${k.language || ''} ${k.language_2 || ''} ${k.county || ''}`.toLowerCase().includes(q.toLowerCase()))
 
   // ── Edit form ──
   if (editing) {
@@ -1633,6 +1681,15 @@ function ContractorList({ contractors, assignments, onChanged }) {
           <input type="text" placeholder="🔍 Name, field, language, county…" value={q} onChange={e => setQ(e.target.value)} />
         </div>
       </div>
+      {languageFilter && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, fontSize: 13 }}>
+          <span style={{ color: '#555' }}>Showing contractors who speak</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#E6F1FB', color: '#185FA5', border: '1px solid #b9d6f2', borderRadius: 999, padding: '3px 10px', fontWeight: 600 }}>
+            {languageFilter}
+            <span style={{ cursor: 'pointer' }} title="Clear filter" onClick={() => onClearLanguageFilter && onClearLanguageFilter()}>✕</span>
+          </span>
+        </div>
+      )}
       {msg && <div className={`alert alert-${msg.kind}`}>{msg.text}</div>}
       <div className="tbl-wrap">
         <table>
