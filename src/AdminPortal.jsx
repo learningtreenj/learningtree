@@ -965,9 +965,20 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
               const canExpand = asg.length > 0 || (c.evaluation_type || '').trim().length > 0
               const statusLbl = caseStatusLabel(c, asg)
               const complete = statusLbl === 'Complete'
+              const allReceived = statusLbl === 'Report Received' // every evaluation submitted
+              const dl = daysLeft(c.Report_Due_date)
+              const dueSoon = !complete && !allReceived && dl !== null && dl < 7 // not all in, due within a week
+              const rowStyle = complete ? { background: 'var(--gray-bg)', color: 'var(--muted)' }
+                : allReceived ? { background: '#e4f6ea' }
+                : dueSoon ? { background: '#fff1de' }
+                : undefined
+              const rowTitle = complete ? 'Completed case'
+                : allReceived ? 'All reports received'
+                : dueSoon ? 'Reports not all in — due within 7 days'
+                : undefined
               return (
                 <Fragment key={c.id}>
-                  <tr style={complete ? { background: 'var(--gray-bg)', color: 'var(--muted)' } : undefined} title={complete ? 'Completed case' : undefined}>
+                  <tr style={rowStyle} title={rowTitle}>
                     <td><span className="tbl-link" onClick={() => onOpen(c)}>{c.case_number || c.id}</span></td>
                     <td><span className="tbl-link" onClick={() => onOpen(c)}>{c.Student_name || '—'}</span></td>
                     <td>{c.School_district || '—'}</td>
