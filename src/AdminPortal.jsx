@@ -99,7 +99,7 @@ function AcceptBadge({ status }) {
 }
 
 export default function AdminPortal({ user }) {
-  const [screen, setScreen] = useState('dashboard')
+  const [screen, setScreen] = useState('cases')
   const [cases, setCases] = useState([])
   const [assignments, setAssignments] = useState([])
   const [contractors, setContractors] = useState([])

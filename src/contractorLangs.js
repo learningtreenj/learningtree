@@ -5,7 +5,7 @@
 
 const SPLIT = /\s*(?:,|\/|&|\+|-|\band\b)\s*/i
 // Fold obvious spelling variants together so they count as one language.
-const ALIAS = { portugese: 'Portuguese', gujurati: 'Gujarati', kanada: 'Kannada', indoniesia: 'Indonesian' }
+const ALIAS = { portugese: 'Portuguese', gujurati: 'Gujarati', kanada: 'Kannada', indoniesia: 'Indonesian', chinese: 'Mandarin' }
 // Non-language tokens to ignore (e.g. "India" is entered as a prefix before the actual
 // languages, like "India, Telugu"). The real languages beside them are still counted.
 const STOP = new Set(['india'])
