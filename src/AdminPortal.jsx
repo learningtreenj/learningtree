@@ -967,13 +967,16 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
               const complete = statusLbl === 'Complete'
               const allReceived = statusLbl === 'Report Received' // every evaluation submitted
               const dl = daysLeft(c.Report_Due_date)
-              const dueSoon = !complete && !allReceived && dl !== null && dl < 7 // not all in, due within a week
+              const pastDue = !complete && !allReceived && dl !== null && dl < 0 // overdue, reports not all in
+              const dueSoon = !complete && !allReceived && dl !== null && dl >= 0 && dl < 7 // not all in, due within a week
               const rowStyle = complete ? { background: 'var(--gray-bg)', color: 'var(--muted)' }
                 : allReceived ? { background: '#e4f6ea' }
+                : pastDue ? { background: '#fde5e5' }
                 : dueSoon ? { background: '#fff1de' }
                 : undefined
               const rowTitle = complete ? 'Completed case'
                 : allReceived ? 'All reports received'
+                : pastDue ? 'Past due — reports not all received'
                 : dueSoon ? 'Reports not all in — due within 7 days'
                 : undefined
               return (
