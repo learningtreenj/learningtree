@@ -1093,6 +1093,20 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
         </div>
       </div>
       {rowMsg && <div className={`alert alert-${rowMsg.kind}`}>{rowMsg.text}</div>}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'center', margin: '0 0 12px', fontSize: 12, color: '#555' }}>
+        <span style={{ fontWeight: 600 }}>Row colors:</span>
+        {[
+          ['#e4f6ea', 'All reports received'],
+          ['#fff1de', 'Due within 7 days'],
+          ['#fde5e5', 'Past due — reports missing'],
+          ['var(--gray-bg, #eef1f4)', 'Complete (sent to district)'],
+        ].map(([bg, label]) => (
+          <span key={label} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ width: 22, height: 14, borderRadius: 3, background: bg, border: '1px solid var(--border, #d7dbe0)', display: 'inline-block' }} />
+            {label}
+          </span>
+        ))}
+      </div>
       <div className="tbl-wrap">
         <table>
           <thead><tr>
