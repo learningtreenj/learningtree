@@ -665,7 +665,7 @@ function NewReferral({ onCreated }) {
     <div className="card" style={{ maxWidth: 720 }}>
       <div className="card-title">📥 New Referral Intake</div>
       {msg && <div className={`alert alert-${msg.kind}`}>{msg.text}</div>}
-      <div className="alert alert-info">A case number is assigned automatically. After creating the case you can assign contractors.</div>
+      <div className="alert alert-info">Enter the case number manually (auto-numbering is paused). After creating the case you can assign contractors.</div>
 
       <label className="upload-zone"
         style={{
