@@ -601,17 +601,20 @@ function NewReferral({ onCreated }) {
     }
 
     let invokeBody
-    if (text && text.trim().length >= 20) {
-      invokeBody = { text }
-    } else if (ext === 'pdf') {
-      // No embedded text (scanned/image PDF) — send the PDF itself for AI OCR.
-      setMsg({ kind: 'info', text: 'No text layer found — reading the scanned document with AI. This can take a little longer…' })
+    if (ext === 'pdf') {
+      // Always send the PDF image so the AI can SEE which boxes are checked — a PDF's
+      // text layer doesn't carry checkbox/highlight state. Include the extracted text
+      // too (when present) to sharpen field reading.
+      setMsg({ kind: 'info', text: 'Reading the referral with AI (checking every box)… this can take a little longer.' })
       try {
         const buf = await file.arrayBuffer()
         invokeBody = { pdf_base64: bytesToBase64(new Uint8Array(buf)) }
+        if (text && text.trim().length >= 20) invokeBody.text = text
       } catch (err) {
         setMsg({ kind: 'danger', text: `Could not read the PDF: ${err.message}` }); setParsing(false); return
       }
+    } else if (text && text.trim().length >= 20) {
+      invokeBody = { text }
     } else {
       setMsg({ kind: 'warn', text: 'Could not read any text from that file. Please enter the fields manually.' })
       setParsing(false); return
