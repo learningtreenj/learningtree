@@ -504,6 +504,7 @@ function bytesToBase64(bytes) {
 
 function NewReferral({ onCreated }) {
   const empty = {
+    case_number: '',
     Student_name: '', student_dob: '', grade: '', Language: '', School_district: '', County: '',
     district_contact: '', case_manager_name: '', case_manager_email: '', case_manager_phone: '', parents_name: '',
     parents_phone: '', parents_email: '', home_address: '', evaluation_type: '', testing_materials: '',
@@ -523,10 +524,14 @@ function NewReferral({ onCreated }) {
     if (!f.Student_name || !f.School_district || !f.Report_Due_date) {
       setMsg({ kind: 'warn', text: 'Student name, district, and report due date are required.' }); return
     }
+    // Auto-numbering is paused — a case number must be entered manually for now.
+    if (!(f.case_number || '').trim()) {
+      setMsg({ kind: 'warn', text: 'Case # is required (auto-numbering is paused). Enter it manually, e.g. 26-0389.' }); return
+    }
     setBusy(true); setMsg(null)
-    // case_number is assigned automatically by the set_case_number trigger
     const phoneDigits = f.parents_phone.replace(/\D/g, '')
     const row = {
+      case_number: f.case_number.trim(),
       Student_name: f.Student_name || null,
       student_dob: f.student_dob || null,
       'grade level': f.grade || null,
@@ -550,7 +555,11 @@ function NewReferral({ onCreated }) {
       created_date: new Date().toISOString().slice(0, 10),
     }
     const { data, error } = await supabase.from('Cases').insert(row).select().single()
-    if (error) { setMsg({ kind: 'danger', text: error.message }); setBusy(false); return }
+    if (error) {
+      const dup = /case_number/i.test(error.message) && /duplicate|unique/i.test(error.message)
+      setMsg({ kind: 'danger', text: dup ? `Case # ${f.case_number.trim()} already exists — choose a different number.` : error.message })
+      setBusy(false); return
+    }
 
     // Store the original referral form so admins and contractors can proofread it.
     // Non-blocking: if the upload fails, the case is still created.
@@ -684,6 +693,16 @@ function NewReferral({ onCreated }) {
       {parsedFrom && (
         <div className="alert alert-success">✅ Filled from <strong>{parsedFrom}</strong>. Please review every field — especially dates and testing materials — before creating the case.</div>
       )}
+
+      <SectionHead>Case Number</SectionHead>
+      <div className="form-row">
+        <div className="form-group">
+          <label>Case # *</label>
+          <input value={f.case_number} onChange={e => set('case_number', e.target.value)} placeholder="e.g. 26-0389" />
+          <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>Auto-numbering is paused — enter the case number manually.</div>
+        </div>
+        <div className="form-group"></div>
+      </div>
 
       <SectionHead>District Information</SectionHead>
       <div className="form-row">
