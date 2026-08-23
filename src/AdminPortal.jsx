@@ -1235,7 +1235,7 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
     const submitted = assignments.filter(a => a.contractor_id != null && (a.status || '').toLowerCase() === 'submitted')
     const src = submitted.length ? submitted : assignments.filter(a => a.contractor_id != null)
     if (!src.length) { setMsg({ kind: 'warn', text: 'No submitted evaluations yet to invoice.' }); return }
-    const items = src.map(a => ({ assignmentId: a.id, evalType: a.eval_type || '', dateOfService: a.submitted_at || a.testing_date }))
+    const items = src.map(a => ({ assignmentId: a.id, evalType: a.eval_type || '', dateOfService: a.testing_date || a.submitted_at }))
       .sort((x, y) => x.assignmentId - y.assignmentId)
     // Last 4 digits: per-district sequence (1000, 1001, ...) assigned in invoice-creation order.
     const { data: seq, error } = await supabase.rpc('allocate_invoice_seq', { p_case_id: c.id })
@@ -2254,7 +2254,7 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
     const approved = caseAssignments.filter(x =>
       qaByAssignment.get(x.id)?.qa_status === 'approved' && x.submitted_at)
     const items = (approved.length > 0 ? approved : caseAssignments).map(x => ({
-      assignmentId: x.id, evalType: x.eval_type || '', dateOfService: x.submitted_at,
+      assignmentId: x.id, evalType: x.eval_type || '', dateOfService: x.testing_date || x.submitted_at,
     })).sort((a, b) => a.assignmentId - b.assignmentId)
     // Last 4 digits: per-district sequence (1000, 1001, ...) assigned in invoice-creation order.
     const { data: seq, error } = await supabase.rpc('allocate_invoice_seq', { p_case_id: selected.case_id })
