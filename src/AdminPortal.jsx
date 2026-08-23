@@ -778,17 +778,35 @@ function contractorOptLabel(k) {
   return k.name + (spec.length ? ` — ${spec.join(' · ')}` : '')
 }
 
+// Maps an eval-type column to the keyword scoreContractors understands.
+const EVAL_SCORE_KEY = { Psych: 'psych', 'Sp.': 'speech', 'Ed.': 'ed', 'Soc.': 'social' }
+
 // Click-to-edit popover for one eval-type cell: reassign/remove existing evaluators,
-// or assign one to a requested-but-empty eval. Positioned at the click point (fixed).
-function CellEditor({ anchor, caseRow, col, token, cellAsg, contractors, busy, onReassign, onRemove, onAssign, onClose }) {
+// or assign one to a requested-but-empty eval. The assign picker shows language- and
+// field-matched recommendations (same scoring as Case Detail). Positioned at the click.
+function CellEditor({ anchor, caseRow, col, token, cellAsg, contractors, assignments = [], busy, onReassign, onRemove, onAssign, onClose }) {
   const [addTo, setAddTo] = useState('')
   const [reSel, setReSel] = useState({})
-  const left = Math.max(8, Math.min(anchor.x, (typeof window !== 'undefined' ? window.innerWidth : 1000) - 320))
-  const top = Math.max(8, Math.min(anchor.y, (typeof window !== 'undefined' ? window.innerHeight : 800) - 300))
+  const left = Math.max(8, Math.min(anchor.x, (typeof window !== 'undefined' ? window.innerWidth : 1000) - 360))
+  const top = Math.max(8, Math.min(anchor.y, (typeof window !== 'undefined' ? window.innerHeight : 800) - 320))
+
+  const evalForScore = token || EVAL_SCORE_KEY[col] || ''
+  const activeCounts = useMemo(() => {
+    const m = new Map()
+    for (const a of assignments) {
+      if (a.contractor_id == null || (a.status || '').toLowerCase() === 'submitted') continue
+      m.set(a.contractor_id, (m.get(a.contractor_id) || 0) + 1)
+    }
+    return m
+  }, [assignments])
+  const recs = useMemo(
+    () => token ? scoreContractors(contractors, activeCounts, evalForScore, caseRow.Language, caseRow.County).slice(0, 8) : [],
+    [token, contractors, activeCounts, evalForScore, caseRow])
+
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 49 }} />
-      <div onClick={e => e.stopPropagation()} style={{ position: 'fixed', left, top, zIndex: 50, background: '#fff', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 8px 28px rgba(0,0,0,.22)', padding: 12, width: 300, fontSize: 13 }}>
+      <div onClick={e => e.stopPropagation()} style={{ position: 'fixed', left, top, zIndex: 50, background: '#fff', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 8px 28px rgba(0,0,0,.22)', padding: 12, width: 330, fontSize: 13 }}>
         <div style={{ fontWeight: 700, marginBottom: 6 }}>{caseRow.case_number || caseRow.id} · {col}</div>
         {cellAsg.length === 0 && <div style={{ color: '#888', marginBottom: 4 }}>No evaluator assigned yet.</div>}
         {cellAsg.map(a => {
@@ -808,7 +826,28 @@ function CellEditor({ anchor, caseRow, col, token, cellAsg, contractors, busy, o
         })}
         {token && (
           <div style={{ borderTop: '1px solid var(--border)', paddingTop: 8, marginTop: 8 }}>
-            <div style={{ marginBottom: 5, color: '#555' }}>{cellAsg.length ? 'Add another for' : 'Assign'} {col}:</div>
+            <div style={{ marginBottom: 6, color: '#555' }}>
+              {cellAsg.length ? 'Add another for' : 'Assign'} {col}{caseRow.Language ? <> · <strong>{caseRow.Language}</strong></> : null}
+            </div>
+            {recs.length > 0 && (
+              <div style={{ maxHeight: 210, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 6, marginBottom: 8 }}>
+                {recs.map(r => (
+                  <div key={r.contractor.identifier} title="Assign & notify"
+                    onClick={() => { if (!busy) onAssign(token, r.contractor.identifier) }}
+                    style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, padding: '6px 8px', cursor: busy ? 'default' : 'pointer', borderBottom: '1px solid var(--border)' }}>
+                    <span style={{ minWidth: 0 }}>
+                      <span style={{ display: 'inline-block', fontSize: 10, fontWeight: 700, padding: '1px 6px', borderRadius: 8, background: r.tier === 'Best' ? '#e4f6ea' : '#eef3f8', color: r.tier === 'Best' ? '#1a7a3c' : '#31618e', marginRight: 6 }}>{r.tier} · {r.score}</span>
+                      <span style={{ fontWeight: 600 }}>{r.contractor.name}</span>
+                      <div style={{ fontSize: 11, color: '#888', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        {[r.contractor.field, [r.contractor.language, r.contractor.language_2].filter(Boolean).join('/'), r.contractor.county && `${r.contractor.county} Co.`].filter(Boolean).join(' · ')}
+                      </div>
+                    </span>
+                    <span style={{ fontSize: 11, color: '#888', whiteSpace: 'nowrap' }}>{r.activeCaseCount} open</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div style={{ fontSize: 11, color: '#999', marginBottom: 4 }}>{recs.length ? 'Or choose anyone:' : 'No language/field match — choose manually:'}</div>
             <select value={addTo} onChange={e => setAddTo(e.target.value)} style={{ width: '100%', padding: '5px 6px' }}>
               <option value="">Select contractor…</option>
               {contractors.map(k => <option key={k.identifier} value={k.identifier}>{contractorOptLabel(k)}</option>)}
@@ -1182,7 +1221,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
       {rows.length > 200 && <div style={{ marginTop: 8, fontSize: 12, color: '#888' }}>Showing first 200 — refine your search to see more.</div>}
       {editCell && (
         <CellEditor anchor={{ x: editCell.x, y: editCell.y }} caseRow={editCell.caseRow} col={editCell.col} token={editCell.token}
-          cellAsg={editCell.cellAsg} contractors={contractors.filter(k => k.active !== false)} busy={rowBusy}
+          cellAsg={editCell.cellAsg} contractors={contractors.filter(k => k.active !== false)} assignments={assignments} busy={rowBusy}
           onReassign={reassignInline} onRemove={removeInline}
           onAssign={(tok, toId) => assignInline(editCell.caseRow, tok, toId)} onClose={() => setEditCell(null)} />
       )}
