@@ -943,8 +943,8 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
   }
 
   // ── Per-column sort + filter ──
-  const [sortCol, setSortCol] = useState(null)
-  const [sortDir, setSortDir] = useState('asc')
+  const [sortCol, setSortCol] = useState('case_number')
+  const [sortDir, setSortDir] = useState('desc')
   const [colFilters, setColFilters] = useState({})
   const [colChecks, setColChecks] = useState({})
   const [openMenu, setOpenMenu] = useState(null)
