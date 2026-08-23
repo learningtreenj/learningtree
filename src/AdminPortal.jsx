@@ -940,6 +940,18 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
     onChanged && onChanged(); setRowBusy(false)
   }
 
+  // ── Inline due-date editing ──
+  const [editDueId, setEditDueId] = useState(null)
+  async function saveDueDate(c, val) {
+    setEditDueId(null)
+    if ((val || '') === (c.Report_Due_date ? String(c.Report_Due_date).slice(0, 10) : '')) return
+    setRowBusy(true); setRowMsg(null)
+    const { error } = await supabase.from('Cases').update({ Report_Due_date: val || null }).eq('id', c.id)
+    if (error) setRowMsg({ kind: 'danger', text: error.message })
+    else setRowMsg({ kind: 'success', text: `Due date updated for ${c.case_number || c.id}.` })
+    onChanged && onChanged(); setRowBusy(false)
+  }
+
   // ── Click-to-edit eval cell ──
   const [editCell, setEditCell] = useState(null) // { caseRow, col, token, cellAsg, x, y }
 
@@ -1201,7 +1213,15 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
                       </td>
                     )
                   })}
-                  <td style={dueColor(c.Report_Due_date)}>{fmtDate(c.Report_Due_date)}</td>
+                  <td style={{ ...dueColor(c.Report_Due_date), whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
+                    {editDueId === c.id
+                      ? <input type="date" autoFocus defaultValue={c.Report_Due_date ? String(c.Report_Due_date).slice(0, 10) : ''}
+                          disabled={rowBusy}
+                          onChange={e => saveDueDate(c, e.target.value)}
+                          onBlur={() => setEditDueId(null)}
+                          style={{ padding: '2px 4px', fontSize: 12 }} />
+                      : <span className="tbl-link" title="Click to edit due date" onClick={() => setEditDueId(c.id)}>{fmtDate(c.Report_Due_date) || 'Set date'}</span>}
+                  </td>
                   <td><span className={`badge-s ${progress === 'Complete' ? 's-completed' : 's-drafting'}`}>{progress}</span></td>
                   <td style={{ whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
                     <button type="button" disabled={rowBusy} onClick={() => setDistrictPaid(c, true)}
