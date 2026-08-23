@@ -7,6 +7,10 @@ export const RATE_PER_EVAL = 880
 
 function fmtDate(iso) {
   if (!iso) return ''
+  // Read the calendar date straight from a YYYY-MM-DD(THH:MM…) string so a date-only
+  // value isn't shifted a day by UTC parsing (e.g. "2026-08-12" showing as 8/11 in ET).
+  const m = String(iso).match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (m) return `${Number(m[2])}/${Number(m[3])}/${m[1]}`
   const d = new Date(iso)
   if (isNaN(d)) return ''
   return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`
