@@ -12,14 +12,29 @@ export function clearMfaVerified() {
   try { sessionStorage.removeItem('mfa_ok') } catch { /* ignore */ }
 }
 
+// "Trusted device" — remember this browser so 2FA is skipped for a while. Persists
+// across logins (localStorage), unlike the per-session mfa_ok flag.
+const TRUST_DAYS = 14
+export function trustDevice(userId, days = TRUST_DAYS) {
+  try { localStorage.setItem(`mfa_trust:${userId}`, String(Date.now() + days * 86400000)) } catch { /* ignore */ }
+}
+export function isDeviceTrusted(userId) {
+  try {
+    const v = Number(localStorage.getItem(`mfa_trust:${userId}`))
+    return Number.isFinite(v) && v > Date.now()
+  } catch { return false }
+}
+
 // Two-factor gate shown after password login (contractors). Offers two methods:
 //   • Authenticator app (TOTP) — native Supabase MFA, upgrades the session to aal2.
 //   • Email code — one-time code emailed via the mfa-email edge function.
 export default function TwoFactor({ user, onVerified }) {
   const [method, setMethod] = useState(null) // null | 'email' | 'totp'
+  const [trust, setTrust] = useState(false)  // remember this device for 14 days
 
   function finish() {
     markMfaVerified(user.id)
+    if (trust) trustDevice(user.id)
     onVerified()
   }
 
@@ -53,6 +68,13 @@ export default function TwoFactor({ user, onVerified }) {
 
         {method === 'email' && <EmailFactor email={user.email} onBack={() => setMethod(null)} onVerified={finish} />}
         {method === 'totp' && <TotpFactor onBack={() => setMethod(null)} onVerified={finish} />}
+
+        {method !== null && (
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, fontSize: 12, color: '#555', marginTop: 14, cursor: 'pointer' }}>
+            <input type="checkbox" checked={trust} onChange={e => setTrust(e.target.checked)} style={{ marginTop: 2 }} />
+            <span>Trust this device for 14 days — don&apos;t ask for a code again on this browser. Only check this on your own private device.</span>
+          </label>
+        )}
       </div>
     </div>
   )

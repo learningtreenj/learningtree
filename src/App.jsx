@@ -3,7 +3,7 @@ import { supabase } from './supabase.js'
 import Login from './Login.jsx'
 import ContractorPortal from './ContractorPortal.jsx'
 import AdminPortal from './AdminPortal.jsx'
-import TwoFactor, { isMfaVerified, clearMfaVerified } from './TwoFactor.jsx'
+import TwoFactor, { isMfaVerified, isDeviceTrusted, clearMfaVerified } from './TwoFactor.jsx'
 
 export default function App() {
   const [session, setSession] = useState(undefined) // undefined = loading
@@ -51,7 +51,7 @@ export default function App() {
         const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel()
         aal2 = data?.currentLevel === 'aal2'
       } catch { /* treat as not elevated */ }
-      if (!cancelled) { setMfaOk(aal2 || isMfaVerified(session.user.id)); setMfaChecked(true) }
+      if (!cancelled) { setMfaOk(aal2 || isMfaVerified(session.user.id) || isDeviceTrusted(session.user.id)); setMfaChecked(true) }
     }
     check()
     return () => { cancelled = true }
