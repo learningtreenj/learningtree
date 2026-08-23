@@ -1182,7 +1182,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
       {rows.length > 200 && <div style={{ marginTop: 8, fontSize: 12, color: '#888' }}>Showing first 200 — refine your search to see more.</div>}
       {editCell && (
         <CellEditor anchor={{ x: editCell.x, y: editCell.y }} caseRow={editCell.caseRow} col={editCell.col} token={editCell.token}
-          cellAsg={editCell.cellAsg} contractors={contractors} busy={rowBusy}
+          cellAsg={editCell.cellAsg} contractors={contractors.filter(k => k.active !== false)} busy={rowBusy}
           onReassign={reassignInline} onRemove={removeInline}
           onAssign={(tok, toId) => assignInline(editCell.caseRow, tok, toId)} onClose={() => setEditCell(null)} />
       )}
@@ -1297,7 +1297,7 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
     onBack()   // case is gone — return to the list
   }
 
-  const filteredContractors = contractors.filter(k =>
+  const filteredContractors = contractors.filter(k => k.active !== false).filter(k =>
     `${k.name || ''} ${k.field || ''} ${k.language || ''} ${k.language_2 || ''} ${k.county || ''}`.toLowerCase().includes(contractorQuery.toLowerCase()))
 
   const recommendations = useMemo(() => {
@@ -1307,7 +1307,8 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
       if (a.contractor_id == null || (a.status || '').toLowerCase() === 'submitted') continue
       activeCounts.set(a.contractor_id, (activeCounts.get(a.contractor_id) || 0) + 1)
     }
-    return scoreContractors(contractors, activeCounts, newAsg.eval_type, c.Language, c.County).slice(0, 8)
+    // Only recommend contractors flagged active.
+    return scoreContractors(contractors.filter(k => k.active !== false), activeCounts, newAsg.eval_type, c.Language, c.County).slice(0, 8)
   }, [newAsg.eval_type, contractors, allAssignments, c])
 
   async function assign() {
@@ -1565,7 +1566,7 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
                               <strong style={{ fontSize: 13 }}>Reassign {a.eval_type || 'evaluation'} to:</strong>
                               <select value={reassignTo} onChange={e => setReassignTo(e.target.value)} style={{ padding: '6px 10px', minWidth: 240 }}>
                                 <option value="">Select contractor…</option>
-                                {contractors.map(k => (
+                                {contractors.filter(k => k.active !== false).map(k => (
                                   <option key={k.identifier} value={k.identifier}>
                                     {k.name}{[k.field, [k.language, k.language_2].filter(Boolean).join('/')].filter(Boolean).length ? ` — ${[k.field, [k.language, k.language_2].filter(Boolean).join('/')].filter(Boolean).join(' · ')}` : ''}
                                   </option>
@@ -1713,6 +1714,17 @@ function ContractorList({ contractors, assignments, onChanged, languageFilter = 
     setInviting(null)
   }
 
+  // Manually mark a contractor active/inactive. Inactive ones are hidden from
+  // assignment recommendations and the assign/reassign pickers.
+  async function toggleActive(k, val) {
+    setBusy(true); setMsg(null)
+    const { error } = await supabase.from('Contractors').update({ active: val }).eq('identifier', k.identifier)
+    if (error) setMsg({ kind: 'danger', text: error.message })
+    else setMsg({ kind: 'success', text: `${k.name} marked ${val ? 'active' : 'inactive'}.` })
+    onChanged()
+    setBusy(false)
+  }
+
   function startEdit(k) {
     const uniq = arr => [...new Set(arr)]
     const fields = uniq((k.field || '').split(',').map(t => t.trim()).filter(Boolean))
@@ -1722,6 +1734,7 @@ function ContractorList({ contractors, assignments, onChanged, languageFilter = 
       fields, languages, county: k.county || '',
       address: k.address || '', zip_code: k.zip_code != null ? String(k.zip_code) : '', current_rate: k.current_rate || '',
       w9_on_file: !!k.w9_on_file, criminal_history_done: !!k.criminal_history_done, NJDOE_submitted: k.NJDOE_submitted || '',
+      active: k.active !== false,
     })
     setMsg(null); setEditing(k)
   }
@@ -1742,6 +1755,7 @@ function ContractorList({ contractors, assignments, onChanged, languageFilter = 
       county: form.county || null,
       address: form.address || null, zip_code: zip ? Number(zip) : null, current_rate: form.current_rate || null,
       w9_on_file: !!form.w9_on_file, criminal_history_done: !!form.criminal_history_done, NJDOE_submitted: form.NJDOE_submitted || null,
+      active: form.active !== false,
     }
     const { error } = await supabase.from('Contractors').update(patch).eq('identifier', editing.identifier)
     setBusy(false)
@@ -1798,6 +1812,9 @@ function ContractorList({ contractors, assignments, onChanged, languageFilter = 
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, textTransform: 'none', letterSpacing: 0, fontWeight: 400, cursor: 'pointer' }}>
               <input type="checkbox" checked={form.criminal_history_done} onChange={e => setF('criminal_history_done', e.target.checked)} /> Criminal history check done
             </label>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, textTransform: 'none', letterSpacing: 0, fontWeight: 400, cursor: 'pointer' }}>
+              <input type="checkbox" checked={form.active !== false} onChange={e => setF('active', e.target.checked)} /> Active (available for assignments)
+            </label>
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
@@ -1829,10 +1846,12 @@ function ContractorList({ contractors, assignments, onChanged, languageFilter = 
       {msg && <div className={`alert alert-${msg.kind}`}>{msg.text}</div>}
       <div className="tbl-wrap">
         <table>
-          <thead><tr><th>Name</th><th>Field</th><th>Languages</th><th>County</th><th>Rate</th><th>W-9</th><th>Open Cases</th><th>Portal Login</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>Field</th><th>Languages</th><th>County</th><th>Rate</th><th>W-9</th><th>Open Cases</th><th>Active</th><th>Portal Login</th><th></th></tr></thead>
           <tbody>
-            {rows.map(k => (
-              <tr key={k.identifier}>
+            {rows.map(k => {
+              const isActive = k.active !== false
+              return (
+              <tr key={k.identifier} style={isActive ? undefined : { background: 'var(--gray-bg, #f1efe8)', color: 'var(--muted, #888)' }}>
                 <td style={{ fontWeight: 600 }}>{k.name}<div style={{ fontWeight: 400, fontSize: 11, color: '#888' }}>{k.email}</div></td>
                 <td>{k.field || '—'}</td>
                 <td>{[k.language, k.language_2].filter(Boolean).join(', ') || '—'}</td>
@@ -1840,6 +1859,11 @@ function ContractorList({ contractors, assignments, onChanged, languageFilter = 
                 <td>{k.current_rate || '—'}</td>
                 <td>{k.w9_on_file ? '✓' : <span style={{ color: 'var(--red)' }}>✗</span>}</td>
                 <td>{openBy[k.identifier] || 0}</td>
+                <td style={{ whiteSpace: 'nowrap' }}>
+                  <button type="button" disabled={busy} onClick={() => toggleActive(k, true)} title="Mark active — available for assignments" style={paidBtnStyle(true, isActive)}>Active</button>
+                  {' '}
+                  <button type="button" disabled={busy} onClick={() => toggleActive(k, false)} title="Mark inactive — hidden from assignment recommendations" style={paidBtnStyle(false, !isActive)}>Inactive</button>
+                </td>
                 <td>
                   <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                     {k.user_id && <span className="badge-s s-completed">Linked</span>}
@@ -1851,7 +1875,8 @@ function ContractorList({ contractors, assignments, onChanged, languageFilter = 
                 </td>
                 <td><button className="btn btn-ghost btn-sm" onClick={() => startEdit(k)}>✏️ Edit</button></td>
               </tr>
-            ))}
+              )
+            })}
           </tbody>
         </table>
       </div>
