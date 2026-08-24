@@ -2145,17 +2145,16 @@ function InvoiceList({ invoices, cases, onChanged }) {
         {msg && <div className={`alert alert-${msg.kind}`}>{msg.text}</div>}
         <div className="tbl-wrap">
           <table>
-            <thead><tr><th>Invoice #</th><th>Student</th><th>District</th><th>Amount</th><th>Issued</th><th>Due</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th style={{ whiteSpace: 'nowrap', minWidth: 120 }}>Invoice #</th><th>Student</th><th>District</th><th>Amount</th><th>Issued</th><th>Status</th><th></th></tr></thead>
             <tbody>
-              {rows.length === 0 && <tr><td colSpan={8} style={{ color: '#888' }}>{invoices.length === 0 ? 'No invoices yet — one is recorded automatically when every report on a case is approved in QA.' : 'No invoices match that search.'}</td></tr>}
+              {rows.length === 0 && <tr><td colSpan={7} style={{ color: '#888' }}>{invoices.length === 0 ? 'No invoices yet — one is recorded automatically when every report on a case is approved in QA.' : 'No invoices match that search.'}</td></tr>}
               {rows.map(inv => editId === inv.id ? (
                 <tr key={inv.id}>
-                  <td><input value={edit.invoice_number} onChange={e => setEdit(p => ({ ...p, invoice_number: e.target.value }))} style={{ width: 110 }} /></td>
+                  <td><input value={edit.invoice_number} onChange={e => setEdit(p => ({ ...p, invoice_number: e.target.value }))} style={{ width: 130 }} /></td>
                   <td><input value={edit.student_name} onChange={e => setEdit(p => ({ ...p, student_name: e.target.value }))} style={{ width: 130 }} /></td>
                   <td><input value={edit.district_name} onChange={e => setEdit(p => ({ ...p, district_name: e.target.value }))} style={{ width: 130 }} /></td>
                   <td><input type="number" value={edit.amount} onChange={e => setEdit(p => ({ ...p, amount: e.target.value }))} style={{ width: 90 }} /></td>
                   <td><input type="date" value={edit.issued_date} onChange={e => setEdit(p => ({ ...p, issued_date: e.target.value }))} /></td>
-                  <td><input type="date" value={edit.due_date} onChange={e => setEdit(p => ({ ...p, due_date: e.target.value }))} /></td>
                   <td>
                     <select value={edit.status} onChange={e => setEdit(p => ({ ...p, status: e.target.value }))}>
                       {['Draft', 'Sent', 'Paid'].map(s => <option key={s}>{s}</option>)}
@@ -2169,14 +2168,11 @@ function InvoiceList({ invoices, cases, onChanged }) {
               ) : (
                 <Fragment key={inv.id}>
                   <tr>
-                    <td style={{ fontVariantNumeric: 'tabular-nums' }}>{inv._number}</td>
+                    <td style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{inv._number}</td>
                     <td>{inv._student}</td>
                     <td>{inv.district_name || '—'}</td>
                     <td style={{ fontVariantNumeric: 'tabular-nums' }}>${Number(inv.amount || 0).toLocaleString()}</td>
                     <td>{fmtDate(inv.issued_date)}</td>
-                    <td style={overdue(inv) ? { color: '#b45309', fontWeight: 700 } : undefined}>
-                      {fmtDate(inv.due_date)}{overdue(inv) ? ' ⚠' : ''}
-                    </td>
                     <td><Badge status={inv.status} /></td>
                     <td style={{ whiteSpace: 'nowrap' }}>
                       <button className="btn btn-secondary btn-sm" onClick={() => startEdit(inv)}>✏️ Edit</button>{' '}
@@ -2187,7 +2183,7 @@ function InvoiceList({ invoices, cases, onChanged }) {
                     </td>
                   </tr>
                   {confirmDel === inv.id && (
-                    <tr><td colSpan={8}>
+                    <tr><td colSpan={7}>
                       <div className="alert alert-danger" style={{ margin: 0 }}>
                         <strong>Delete invoice {inv._number}?</strong> This removes it from the register permanently. The case and its reports are not affected.{' '}
                         <button className="btn btn-danger btn-sm" disabled={busy} onClick={() => remove(inv)}>Delete</button>{' '}
