@@ -18,6 +18,58 @@ const GRADES = ['Pre-K', 'K', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10',
 const CONTRACTOR_FIELDS = ['Speech Pathologist', 'Psychologist', 'Learning Consultant', 'Social Worker', 'Occupational Therapist', 'Physical Therapist', 'Translator', 'Interpreter']
 const LANGUAGES = ['English', 'Spanish', 'Portuguese', 'Arabic', 'Creole', 'Russian', 'Chinese', 'Mandarin', 'Cantonese', 'Hebrew', 'Polish', 'Korean', 'Italian', 'French', 'Turkish', 'Vietnamese', 'Urdu', 'Hindi', 'Punjabi', 'Gujarati', 'Bengali', 'Tamil', 'Telugu', 'Marathi', 'Malayalam', 'Kannada', 'Tagalog', 'Japanese', 'Ukrainian', 'Persian', 'Greek', 'Indonesian']
 
+
+// ---------------------------------------------------------------------------
+// Client Invoices — auto-recording
+// A district invoice is recorded the moment every report on a case clears QA.
+// It lands as Draft (the work is billable but not yet out the door) and flips
+// to Sent when the case is marked sent to the district. Repeat calls are safe:
+// the invoice number is unique in the database, so a case can only ever
+// produce one auto-recorded invoice.
+// ---------------------------------------------------------------------------
+const INVOICE_TERMS_DAYS = 30 // Net 30
+
+// Local-calendar date helpers. Deliberately not routed through the shared
+// toISODate(), which normalises via UTC and can land a day early in the evening.
+function localISO(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function todayISO() { return localISO(new Date()) }
+
+function addDays(isoDate, days) {
+  const d = new Date(`${isoDate}T00:00:00`)
+  d.setDate(d.getDate() + days)
+  return localISO(d)
+}
+
+// caseRow needs: id, case_number, Student_name, School_district, Language
+async function autoRecordInvoice(caseRow, approvedCount) {
+  if (!caseRow?.id) return { skipped: 'no case' }
+  // Reuse the suffix already printed on the invoice document, or allocate it now.
+  const { data: seq, error: seqErr } = await supabase.rpc('allocate_invoice_seq', { p_case_id: caseRow.id })
+  if (seqErr) return { error: seqErr.message }
+  const invoice_number = `${caseRow.case_number || caseRow.id}-${seq}`
+
+  const { data: existing } = await supabase.from('Invoices').select('id').eq('invoice_number', invoice_number).maybeSingle()
+  if (existing) return { skipped: 'already recorded', invoice_number }
+
+  const rate = await getRate(caseRow.Language)
+  const amount = Math.max(Number(approvedCount) || 0, 1) * rate
+  const issued_date = todayISO()
+  const { error } = await supabase.from('Invoices').insert({
+    case_id: caseRow.id,
+    invoice_number,
+    student_name: caseRow.Student_name || null,
+    district_name: caseRow.School_district || null,
+    amount,
+    issued_date,
+    due_date: addDays(issued_date, INVOICE_TERMS_DAYS),
+    status: 'Draft',
+  })
+  return error ? { error: error.message } : { created: true, invoice_number, amount }
+}
+
 // Dropdown that preserves an existing non-standard value as a selectable option so edits never silently drop it
 function ChoiceSelect({ value, options, onChange }) {
   const list = (!value || options.includes(value)) ? options : [value, ...options]
@@ -1333,7 +1385,12 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
     const { error } = await supabase.from('Cases').update({ sent_to_district_at: val }).eq('id', c.id)
     if (error) { setMsg({ kind: 'danger', text: error.message }); setBusy(false); return }
     setC(prev => ({ ...prev, sent_to_district_at: val }))
-    setMsg({ kind: 'success', text: sending ? 'Marked as sent to the district — case is now Complete.' : 'Reopened — case is no longer marked Complete.' })
+    // Keep the Client Invoices register in step: Draft -> Sent on send, and back on reopen.
+    await supabase.from('Invoices')
+      .update({ status: sending ? 'Sent' : 'Draft' })
+      .eq('case_id', c.id)
+      .eq('status', sending ? 'Draft' : 'Sent')
+    setMsg({ kind: 'success', text: sending ? 'Marked as sent to the district — case is now Complete; its invoice is now marked Sent.' : 'Reopened — case is no longer marked Complete.' })
     onChanged(); setBusy(false)
   }
 
@@ -1960,21 +2017,102 @@ function ContractorList({ contractors, assignments, onChanged, languageFilter = 
 }
 
 function InvoiceList({ invoices, cases, onChanged }) {
-  const [f, setF] = useState({ case_id: '', district_name: '', amount: '', issued_date: '', due_date: '', status: 'Draft' })
+  const [f, setF] = useState({ case_id: '', invoice_number: '', student_name: '', district_name: '', amount: '', issued_date: '', due_date: '', status: 'Draft' })
   const [msg, setMsg] = useState(null)
+  const [editId, setEditId] = useState(null)
+  const [edit, setEdit] = useState({})
+  const [busy, setBusy] = useState(false)
+  const [confirmDel, setConfirmDel] = useState(null)
+  const [q, setQ] = useState('')
+
+  const caseById = useMemo(() => new Map(cases.map(c => [c.id, c])), [cases])
+
+  // Invoice # / student fall back to the linked case for older rows recorded
+  // before those columns existed.
+  const rows = useMemo(() => {
+    const list = invoices.map(inv => {
+      const c = inv.case_id ? caseById.get(inv.case_id) : null
+      return {
+        ...inv,
+        _number: inv.invoice_number || (c?.invoice_seq ? `${c.case_number || c.id}-${c.invoice_seq}` : `—`),
+        _student: inv.student_name || c?.Student_name || '—',
+      }
+    })
+    const needle = q.trim().toLowerCase()
+    if (!needle) return list
+    return list.filter(r => [r._number, r._student, r.district_name, r.status].some(v => String(v || '').toLowerCase().includes(needle)))
+  }, [invoices, caseById, q])
+
+  const totals = useMemo(() => {
+    const sum = (pred) => rows.filter(pred).reduce((t, r) => t + Number(r.amount || 0), 0)
+    return {
+      all: sum(() => true),
+      outstanding: sum(r => (r.status || '').toLowerCase() !== 'paid'),
+      overdue: sum(r => (r.status || '').toLowerCase() !== 'paid' && r.due_date && r.due_date < todayISO()),
+    }
+  }, [rows])
 
   async function create() {
     if (!f.district_name || !f.amount) { setMsg({ kind: 'warn', text: 'District and amount are required.' }); return }
+    setBusy(true)
     const { error } = await supabase.from('Invoices').insert({
       case_id: f.case_id ? Number(f.case_id) : null,
+      invoice_number: f.invoice_number.trim() || null,
+      student_name: f.student_name.trim() || null,
       district_name: f.district_name,
       amount: Number(f.amount),
       issued_date: f.issued_date || null,
       due_date: f.due_date || null,
       status: f.status,
     })
+    setBusy(false)
     if (error) setMsg({ kind: 'danger', text: error.message })
-    else { setMsg({ kind: 'success', text: 'Invoice created.' }); setF({ case_id: '', district_name: '', amount: '', issued_date: '', due_date: '', status: 'Draft' }); onChanged() }
+    else {
+      setMsg({ kind: 'success', text: 'Invoice created.' })
+      setF({ case_id: '', invoice_number: '', student_name: '', district_name: '', amount: '', issued_date: '', due_date: '', status: 'Draft' })
+      onChanged()
+    }
+  }
+
+  // Picking a case pre-fills the invoice the same way the automation would.
+  function pickCase(id) {
+    const c = id ? caseById.get(Number(id)) : null
+    setF(p => ({
+      ...p,
+      case_id: id,
+      student_name: c?.Student_name || p.student_name,
+      district_name: c?.School_district || p.district_name,
+      invoice_number: c?.invoice_seq ? `${c.case_number || c.id}-${c.invoice_seq}` : p.invoice_number,
+    }))
+  }
+
+  function startEdit(inv) {
+    setEditId(inv.id); setMsg(null)
+    setEdit({
+      invoice_number: inv.invoice_number || '',
+      student_name: inv.student_name || '',
+      district_name: inv.district_name || '',
+      amount: inv.amount ?? '',
+      issued_date: inv.issued_date || '',
+      due_date: inv.due_date || '',
+      status: inv.status || 'Draft',
+    })
+  }
+
+  async function saveEdit(id) {
+    setBusy(true); setMsg(null)
+    const { error } = await supabase.from('Invoices').update({
+      invoice_number: edit.invoice_number.trim() || null,
+      student_name: edit.student_name.trim() || null,
+      district_name: edit.district_name.trim() || null,
+      amount: edit.amount === '' ? null : Number(edit.amount),
+      issued_date: edit.issued_date || null,
+      due_date: edit.due_date || null,
+      status: edit.status,
+    }).eq('id', id)
+    setBusy(false)
+    if (error) { setMsg({ kind: 'danger', text: error.message }); return }
+    setEditId(null); setMsg({ kind: 'success', text: 'Invoice updated.' }); onChanged()
   }
 
   async function setStatus(inv, status) {
@@ -1982,29 +2120,82 @@ function InvoiceList({ invoices, cases, onChanged }) {
     onChanged()
   }
 
+  async function remove(inv) {
+    setBusy(true)
+    const { error } = await supabase.from('Invoices').delete().eq('id', inv.id)
+    setBusy(false); setConfirmDel(null)
+    if (error) setMsg({ kind: 'danger', text: error.message })
+    else { setMsg({ kind: 'success', text: `Invoice ${inv.invoice_number || inv.id} deleted.` }); onChanged() }
+  }
+
+  const overdue = r => (r.status || '').toLowerCase() !== 'paid' && r.due_date && r.due_date < todayISO()
+
   return (
     <div className="grid-2" style={{ alignItems: 'start' }}>
       <div className="card">
-        <div className="card-title">Invoices</div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <div className="card-title" style={{ marginBottom: 0 }}>Invoices</div>
+          <input placeholder="Search # / student / district…" value={q} onChange={e => setQ(e.target.value)} style={{ maxWidth: 240 }} />
+        </div>
+        <div style={{ display: 'flex', gap: 18, margin: '10px 0 4px', fontSize: 13, color: '#555', flexWrap: 'wrap' }}>
+          <span>Total <strong>${totals.all.toLocaleString()}</strong></span>
+          <span>Outstanding <strong>${totals.outstanding.toLocaleString()}</strong></span>
+          {totals.overdue > 0 && <span style={{ color: '#b45309' }}>Overdue <strong>${totals.overdue.toLocaleString()}</strong></span>}
+        </div>
+        {msg && <div className={`alert alert-${msg.kind}`}>{msg.text}</div>}
         <div className="tbl-wrap">
           <table>
-            <thead><tr><th>#</th><th>District</th><th>Amount</th><th>Issued</th><th>Due</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th>Invoice #</th><th>Student</th><th>District</th><th>Amount</th><th>Issued</th><th>Due</th><th>Status</th><th></th></tr></thead>
             <tbody>
-              {invoices.length === 0 && <tr><td colSpan={7} style={{ color: '#888' }}>No invoices yet.</td></tr>}
-              {invoices.map(inv => (
+              {rows.length === 0 && <tr><td colSpan={8} style={{ color: '#888' }}>{invoices.length === 0 ? 'No invoices yet — one is recorded automatically when every report on a case is approved in QA.' : 'No invoices match that search.'}</td></tr>}
+              {rows.map(inv => editId === inv.id ? (
                 <tr key={inv.id}>
-                  <td>{inv.id}</td>
-                  <td>{inv.district_name}</td>
-                  <td>${Number(inv.amount || 0).toLocaleString()}</td>
-                  <td>{fmtDate(inv.issued_date)}</td>
-                  <td>{fmtDate(inv.due_date)}</td>
-                  <td><Badge status={inv.status} /></td>
+                  <td><input value={edit.invoice_number} onChange={e => setEdit(p => ({ ...p, invoice_number: e.target.value }))} style={{ width: 110 }} /></td>
+                  <td><input value={edit.student_name} onChange={e => setEdit(p => ({ ...p, student_name: e.target.value }))} style={{ width: 130 }} /></td>
+                  <td><input value={edit.district_name} onChange={e => setEdit(p => ({ ...p, district_name: e.target.value }))} style={{ width: 130 }} /></td>
+                  <td><input type="number" value={edit.amount} onChange={e => setEdit(p => ({ ...p, amount: e.target.value }))} style={{ width: 90 }} /></td>
+                  <td><input type="date" value={edit.issued_date} onChange={e => setEdit(p => ({ ...p, issued_date: e.target.value }))} /></td>
+                  <td><input type="date" value={edit.due_date} onChange={e => setEdit(p => ({ ...p, due_date: e.target.value }))} /></td>
                   <td>
-                    {(inv.status || '').toLowerCase() !== 'paid' && (
-                      <button className="btn btn-ghost btn-sm" onClick={() => setStatus(inv, 'Paid')}>Mark Paid</button>
-                    )}
+                    <select value={edit.status} onChange={e => setEdit(p => ({ ...p, status: e.target.value }))}>
+                      {['Draft', 'Sent', 'Paid'].map(s => <option key={s}>{s}</option>)}
+                    </select>
+                  </td>
+                  <td style={{ whiteSpace: 'nowrap' }}>
+                    <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => saveEdit(inv.id)}>Save</button>{' '}
+                    <button className="btn btn-ghost btn-sm" onClick={() => setEditId(null)}>Cancel</button>
                   </td>
                 </tr>
+              ) : (
+                <Fragment key={inv.id}>
+                  <tr>
+                    <td style={{ fontVariantNumeric: 'tabular-nums' }}>{inv._number}</td>
+                    <td>{inv._student}</td>
+                    <td>{inv.district_name || '—'}</td>
+                    <td style={{ fontVariantNumeric: 'tabular-nums' }}>${Number(inv.amount || 0).toLocaleString()}</td>
+                    <td>{fmtDate(inv.issued_date)}</td>
+                    <td style={overdue(inv) ? { color: '#b45309', fontWeight: 700 } : undefined}>
+                      {fmtDate(inv.due_date)}{overdue(inv) ? ' ⚠' : ''}
+                    </td>
+                    <td><Badge status={inv.status} /></td>
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      <button className="btn btn-secondary btn-sm" onClick={() => startEdit(inv)}>✏️ Edit</button>{' '}
+                      {(inv.status || '').toLowerCase() !== 'paid' && (
+                        <button className="btn btn-ghost btn-sm" onClick={() => setStatus(inv, 'Paid')}>Mark Paid</button>
+                      )}{' '}
+                      <button className="btn btn-ghost btn-sm" title="Delete invoice" onClick={() => { setConfirmDel(inv.id); setMsg(null) }}>🗑</button>
+                    </td>
+                  </tr>
+                  {confirmDel === inv.id && (
+                    <tr><td colSpan={8}>
+                      <div className="alert alert-danger" style={{ margin: 0 }}>
+                        <strong>Delete invoice {inv._number}?</strong> This removes it from the register permanently. The case and its reports are not affected.{' '}
+                        <button className="btn btn-danger btn-sm" disabled={busy} onClick={() => remove(inv)}>Delete</button>{' '}
+                        <button className="btn btn-ghost btn-sm" onClick={() => setConfirmDel(null)}>Cancel</button>
+                      </div>
+                    </td></tr>
+                  )}
+                </Fragment>
               ))}
             </tbody>
           </table>
@@ -2012,14 +2203,20 @@ function InvoiceList({ invoices, cases, onChanged }) {
       </div>
       <div className="card" style={{ border: '2px solid var(--accent)' }}>
         <div className="card-title">➕ New Invoice</div>
-        {msg && <div className={`alert alert-${msg.kind}`}>{msg.text}</div>}
-        <div className="form-group"><label>District *</label><input value={f.district_name} onChange={e => setF(p => ({ ...p, district_name: e.target.value }))} /></div>
-        <div className="form-group"><label>Case (optional)</label>
-          <select value={f.case_id} onChange={e => setF(p => ({ ...p, case_id: e.target.value }))}>
+        <div style={{ fontSize: 12.5, color: '#666', marginBottom: 10 }}>
+          Invoices record themselves when a case clears QA. Use this only for off-cycle billing — interpretation, translation, or a re-issue.
+        </div>
+        <div className="form-group"><label>Case (optional — pre-fills the rest)</label>
+          <select value={f.case_id} onChange={e => pickCase(e.target.value)}>
             <option value="">— none —</option>
             {cases.slice(0, 400).map(c => <option key={c.id} value={c.id}>{c.case_number} — {c.Student_name}</option>)}
           </select>
         </div>
+        <div className="form-row">
+          <div className="form-group"><label>Invoice #</label><input value={f.invoice_number} onChange={e => setF(p => ({ ...p, invoice_number: e.target.value }))} placeholder="26-001-1000" /></div>
+          <div className="form-group"><label>Student</label><input value={f.student_name} onChange={e => setF(p => ({ ...p, student_name: e.target.value }))} /></div>
+        </div>
+        <div className="form-group"><label>District *</label><input value={f.district_name} onChange={e => setF(p => ({ ...p, district_name: e.target.value }))} /></div>
         <div className="form-row">
           <div className="form-group"><label>Amount ($) *</label><input type="number" value={f.amount} onChange={e => setF(p => ({ ...p, amount: e.target.value }))} /></div>
           <div className="form-group"><label>Status</label>
@@ -2029,10 +2226,15 @@ function InvoiceList({ invoices, cases, onChanged }) {
           </div>
         </div>
         <div className="form-row">
-          <div className="form-group"><label>Issued Date</label><input type="date" value={f.issued_date} onChange={e => setF(p => ({ ...p, issued_date: e.target.value }))} /></div>
-          <div className="form-group"><label>Due Date</label><input type="date" value={f.due_date} onChange={e => setF(p => ({ ...p, due_date: e.target.value }))} /></div>
+          <div className="form-group"><label>Issued Date</label>
+            <input type="date" value={f.issued_date} onChange={e => {
+              const v = e.target.value
+              setF(p => ({ ...p, issued_date: v, due_date: v && !p.due_date ? addDays(v, INVOICE_TERMS_DAYS) : p.due_date }))
+            }} />
+          </div>
+          <div className="form-group"><label>Due Date <span style={{ color: '#888', fontWeight: 400 }}>(Net 30)</span></label><input type="date" value={f.due_date} onChange={e => setF(p => ({ ...p, due_date: e.target.value }))} /></div>
         </div>
-        <button className="btn btn-primary" onClick={create}>Create Invoice</button>
+        <button className="btn btn-primary" disabled={busy} onClick={create}>Create Invoice</button>
       </div>
     </div>
   )
@@ -2338,10 +2540,16 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
       const siblings = assignments.filter(x => x.case_id === selected.case_id && x.contractor_id != null)
       const allApproved = siblings.every(x =>
         x.id === selected.id || qaByAssignment.get(x.id)?.qa_status === 'approved')
+      let invoiceNote = ''
       if (allApproved) {
         await supabase.from('Cases').update({ Status: 'Completed' }).eq('id', selected.case_id)
+        // Every report on this case is approved -> record the district invoice.
+        const res = await autoRecordInvoice({ id: selected.case_id, ...(selected.Cases || {}) }, siblings.length)
+        if (res.created) invoiceNote = ` Invoice ${res.invoice_number} ($${Number(res.amount).toLocaleString()}) recorded in Client Invoices as Draft.`
+        else if (res.skipped === 'already recorded') invoiceNote = ` Invoice ${res.invoice_number} was already on file.`
+        else if (res.error) invoiceNote = ` (Could not record the invoice automatically: ${res.error})`
       }
-      setMsg({ kind: 'success', text: 'Approved. Earning created for the contractor; case auto-completes when all its reports are approved.' })
+      setMsg({ kind: 'success', text: `Approved. Earning created for the contractor; case auto-completes when all its reports are approved.${invoiceNote}` })
     } else {
       setMsg({ kind: 'info', text: status === 'needs_revision' ? 'Marked as needing revision.' : 'Review saved.' })
     }
@@ -2370,23 +2578,17 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
     })
   }
 
+  // Manual fallback: normally the invoice records itself when the last report
+  // on the case is approved. This re-runs the same routine (safe to press twice).
   async function recordInvoice() {
     if (!selected) return
     setBusy(true); setMsg(null)
     const caseAssignments = assignments.filter(x => x.case_id === selected.case_id && x.contractor_id != null)
     const approvedCount = caseAssignments.filter(x => qaByAssignment.get(x.id)?.qa_status === 'approved').length || 1
-    const rate = await getRate(selected.Cases?.Language)
-    const { error } = await supabase.from('Invoices').insert({
-      case_id: selected.case_id,
-      district_name: selected.Cases?.School_district || null,
-      amount: approvedCount * rate,
-      issued_date: new Date().toISOString().slice(0, 10),
-      status: 'Sent',
-    })
-    if (!error) {
-      await supabase.from('qa_reviews').update({ invoice_sent_at: new Date().toISOString(), invoice_status: 'sent' }).eq('assignment_id', selected.id)
-    }
-    setMsg(error ? { kind: 'danger', text: error.message } : { kind: 'success', text: `Invoice recorded in Client Invoices ($${(approvedCount * rate).toLocaleString()}).` })
+    const res = await autoRecordInvoice({ id: selected.case_id, ...(selected.Cases || {}) }, approvedCount)
+    if (res.error) setMsg({ kind: 'danger', text: res.error })
+    else if (res.skipped === 'already recorded') setMsg({ kind: 'info', text: `Invoice ${res.invoice_number} is already in Client Invoices.` })
+    else setMsg({ kind: 'success', text: `Invoice ${res.invoice_number} recorded in Client Invoices ($${Number(res.amount).toLocaleString()}).` })
     onChanged(); setBusy(false)
   }
 
@@ -2493,7 +2695,7 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
                 </div>
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                   <button className="btn btn-secondary btn-sm" onClick={downloadInvoice}>⬇ Download Invoice (.doc)</button>
-                  <button className="btn btn-ghost btn-sm" disabled={busy} onClick={recordInvoice}>Record in Client Invoices</button>
+                  <button className="btn btn-ghost btn-sm" disabled={busy} onClick={recordInvoice} title="Normally automatic when the last report is approved — use this to force it">Record invoice now</button>
                 </div>
               </div>
             )}
