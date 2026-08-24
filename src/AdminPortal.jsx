@@ -120,6 +120,27 @@ function abbrevEvals(str) {
   return (str || '').split(',').map(t => abbrevEval(t.trim())).filter(Boolean).join(', ')
 }
 
+// Dashboard evaluation-type pills — abbreviated, each a unique color.
+const DASH_EVAL_LEGEND = [
+  { label: 'Spch', bg: '#e2eefb', fg: '#1a56a0' },   // blue
+  { label: 'Psych', bg: '#efe9fb', fg: '#5b3fa3' },  // purple
+  { label: 'Ed', bg: '#e5f3e2', fg: '#2c6b2f' },     // green
+  { label: 'Soc.', bg: '#fdeede', fg: '#9a5b12' },   // amber
+  { label: 'OT/Other', bg: '#e0f2f0', fg: '#0f6e56' }, // teal
+]
+function evalPillInfo(evalType) {
+  const s = (evalType || '').toLowerCase()
+  if (s.includes('speech') || s.includes('language')) return DASH_EVAL_LEGEND[0]
+  if (s.includes('psych')) return DASH_EVAL_LEGEND[1]
+  if (s.includes('educ')) return DASH_EVAL_LEGEND[2]
+  if (s.includes('social')) return DASH_EVAL_LEGEND[3]
+  return DASH_EVAL_LEGEND[4]
+}
+function EvalPill({ evalType }) {
+  const p = evalPillInfo(evalType)
+  return <span title={evalType || ''} style={{ display: 'inline-block', fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 6, background: p.bg, color: p.fg }}>{p.label}</span>
+}
+
 // Fixed evaluation-type columns for the Cases table. Everything that isn't one of the
 // four standard types (OT, PT, etc.) buckets into "Other".
 const EVAL_COLS = ['Psych', 'Sp.', 'Ed.', 'Soc.', 'Other']
@@ -479,7 +500,14 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
       <ContractorsByLanguage contractors={contractors} onLanguage={onLanguage} />
       <div className="card">
         <div className="card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
-          <span>Upcoming Due Dates</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+            Upcoming Due Dates
+            <span style={{ display: 'inline-flex', gap: 5, fontWeight: 400 }}>
+              {DASH_EVAL_LEGEND.map(p => (
+                <span key={p.label} style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 6, background: p.bg, color: p.fg }}>{p.label}</span>
+              ))}
+            </span>
+          </span>
           <div style={{ position: 'relative', fontWeight: 400, display: 'flex', gap: 6, alignItems: 'center' }}>
             <input type="text" placeholder="🔍 Filter by evaluator…" value={cFilter} onChange={e => setCFilter(e.target.value)}
               style={{ padding: '5px 8px', fontSize: 13, border: '1px solid var(--border)', borderRadius: 5, width: 190 }} />
@@ -506,45 +534,22 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
               {loading && <tr><td colSpan={7} style={{ color: '#888' }}>Loading…</td></tr>}
               {!loading && filteredGroups.length === 0 && <tr><td colSpan={7} style={{ color: '#888' }}>No open assignments.</td></tr>}
               {filteredGroups.slice(0, 15).map(g => {
-                if (g.items.length === 1) {
-                  const a = g.items[0]
-                  return (
-                    <tr key={g.name}>
-                      <td><span className="tbl-link" onClick={() => openCaseById(a.case_id)}>{a.Cases?.case_number || a.case_id}</span></td>
-                      <td style={{ fontWeight: 600 }}>{g.name}</td>
-                      <td>{a.eval_type ? abbrevEval(a.eval_type) : '—'}</td>
-                      <td>{a.Contractors?.name || <span className="badge-s s-unassigned">Unassigned</span>}</td>
-                      <td style={dueColor(a.report_due_date)}>{fmtDate(a.report_due_date)}</td>
-                      <td style={dueColor(a.report_due_date)}>{daysLeft(a.report_due_date) ?? '—'}</td>
-                      <td>{statusBadge(a)}</td>
-                    </tr>
-                  )
-                }
-                const nearest = g.items[0]
-                const sameCase = g.items.every(x => x.case_id === g.items[0].case_id) ? g.items[0] : null
+                const items = g.items
+                const nearest = items[0]
+                const sameCase = items.every(x => x.case_id === items[0].case_id) ? items[0] : null
+                const evaluators = [...new Set(items.map(x => x.Contractors?.name).filter(Boolean))]
                 return (
-                  <Fragment key={g.name}>
-                    <tr style={{ cursor: 'pointer' }} onClick={() => toggle(g.name)}>
-                      <td>{sameCase ? <span className="tbl-link" onClick={e => { e.stopPropagation(); openCaseById(sameCase.case_id) }}>{sameCase.Cases?.case_number || sameCase.case_id}</span> : '—'}</td>
-                      <td style={{ fontWeight: 600 }}>{g.name}</td>
-                      <td><span className="tbl-link"><span style={{ display: 'inline-block', width: 12 }}>{expanded[g.name] ? '▾' : '▸'}</span>{g.items.length} evaluations</span></td>
-                      <td>—</td>
-                      <td style={dueColor(nearest.report_due_date)}>{fmtDate(nearest.report_due_date)}</td>
-                      <td style={dueColor(nearest.report_due_date)}>{daysLeft(nearest.report_due_date) ?? '—'}</td>
-                      <td><span className="badge-s s-assigned">Assigned</span></td>
-                    </tr>
-                    {expanded[g.name] && g.items.map(a => (
-                      <tr key={a.id} style={{ background: '#f8fafc' }}>
-                        <td></td>
-                        <td></td>
-                        <td style={{ paddingLeft: 24 }}><span className="tbl-link" onClick={() => openCaseById(a.case_id)}>↳ {a.Cases?.case_number || a.case_id} · {a.eval_type ? abbrevEval(a.eval_type) : '—'}</span></td>
-                        <td>{a.Contractors?.name || <span className="badge-s s-unassigned">Unassigned</span>}</td>
-                        <td style={dueColor(a.report_due_date)}>{fmtDate(a.report_due_date)}</td>
-                        <td style={dueColor(a.report_due_date)}>{daysLeft(a.report_due_date) ?? '—'}</td>
-                        <td>{statusBadge(a)}</td>
-                      </tr>
-                    ))}
-                  </Fragment>
+                  <tr key={g.name}>
+                    <td>{sameCase
+                      ? <span className="tbl-link" onClick={() => openCaseById(sameCase.case_id)}>{sameCase.Cases?.case_number || sameCase.case_id}</span>
+                      : <span style={{ color: '#888' }}>multiple</span>}</td>
+                    <td style={{ fontWeight: 600 }}>{g.name}</td>
+                    <td><span style={{ display: 'inline-flex', flexWrap: 'wrap', gap: 4 }}>{items.map(a => <EvalPill key={a.id} evalType={a.eval_type} />)}</span></td>
+                    <td>{evaluators.length ? evaluators.join(', ') : <span className="badge-s s-unassigned">Unassigned</span>}</td>
+                    <td style={dueColor(nearest.report_due_date)}>{fmtDate(nearest.report_due_date)}</td>
+                    <td style={dueColor(nearest.report_due_date)}>{daysLeft(nearest.report_due_date) ?? '—'}</td>
+                    <td>{items.length === 1 ? statusBadge(items[0]) : <span className="badge-s s-assigned">Assigned</span>}</td>
+                  </tr>
                 )
               })}
             </tbody>
