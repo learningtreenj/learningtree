@@ -116,12 +116,21 @@ function caseStatusCls(label) {
   return 's-assigned'
 }
 
+// Whole days an assignment has been awaiting the contractor's acceptance
+// (since they were emailed the assignment). Null if we don't have that timestamp.
+function daysWaiting(a) {
+  const since = a?.assignment_email_sent_at
+  if (!since) return null
+  return Math.max(0, Math.floor((Date.now() - new Date(since).getTime()) / 86400000))
+}
+
 // Shows whether the contractor has accepted/declined an assignment
-function AcceptBadge({ status }) {
-  const s = (status || 'pending').toLowerCase()
+function AcceptBadge({ a }) {
+  const s = (a?.acceptance_status || 'pending').toLowerCase()
   if (s === 'accepted') return <span className="badge-s s-completed">✓ Accepted</span>
   if (s === 'declined') return <span className="badge-s s-overdue">✕ Declined</span>
-  return <span className="badge-s s-pending">Awaiting</span>
+  const d = daysWaiting(a)
+  return <span className="badge-s s-pending">Awaiting{d !== null ? ` · ${d}d` : ''}</span>
 }
 
 export default function AdminPortal({ user }) {
@@ -1025,9 +1034,16 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
     return { asg, token }
   }
   // Per-evaluator status label shown inside an eval cell.
-  const evalStatus = a => (a.status || '').toLowerCase() === 'submitted'
-    ? { t: "Report Rec'd", cls: 's-completed' }
-    : { t: 'Assigned', cls: 's-assigned' }
+  const evalStatus = a => {
+    if ((a.status || '').toLowerCase() === 'submitted') return { t: "Report Rec'd", cls: 's-completed' }
+    const acc = (a.acceptance_status || 'pending').toLowerCase()
+    if (acc === 'declined') return { t: 'Declined', cls: 's-overdue' }
+    if (acc !== 'accepted') {
+      const d = daysWaiting(a)
+      return { t: d !== null ? `Awaiting Acceptance · ${d}d` : 'Awaiting Acceptance', cls: 's-pending' }
+    }
+    return { t: 'Assigned', cls: 's-assigned' }
+  }
   const toggleCheck = (key, val) => setColChecks(p => {
     const cur = new Set(p[key] || [])
     cur.has(val) ? cur.delete(val) : cur.add(val)
@@ -1600,7 +1616,7 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
                       <tr>
                         <td>{a.Contractors?.name || '—'}</td>
                         <td>{a.eval_type || '—'}</td>
-                        <td><AcceptBadge status={a.acceptance_status} /></td>
+                        <td><AcceptBadge a={a} /></td>
                         <td style={dueColor(a.report_due_date)}>{fmtDate(a.report_due_date)}</td>
                         <td>{a.testing_date ? fmtDate(a.testing_date) : '—'}</td>
                         <td><Badge status={a.status} /></td>
