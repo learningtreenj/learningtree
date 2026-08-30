@@ -1113,10 +1113,10 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
       case 'assignments': return asg.length                        // numeric
       case 'status': return caseProgressText(c, asg).toLowerCase()
       case 'district_paid': return c.district_paid ? 'yes' : 'no'
-      case 'case_number': return (c.case_number || '').toLowerCase()
-      case 'Student_name': return (c.Student_name || '').toLowerCase()
-      case 'School_district': return (c.School_district || '').toLowerCase()
-      case 'evaluation_type': return (c.evaluation_type || '').toLowerCase()
+      case 'case_number': return String(c.case_number ?? '').toLowerCase()
+      case 'Student_name': return String(c.Student_name ?? '').toLowerCase()
+      case 'School_district': return String(c.School_district ?? '').toLowerCase()
+      case 'evaluation_type': return String(c.evaluation_type ?? '').toLowerCase()
       default: return ''
     }
   }
