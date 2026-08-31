@@ -1163,7 +1163,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
 
   // A sortable/filterable header cell (used for the non-eval columns).
   const menuTh = (key, label) => (
-    <th key={key} style={{ position: 'relative', whiteSpace: 'nowrap' }}>
+    <th key={key} style={{ whiteSpace: 'nowrap' }}>
       <span style={{ cursor: 'pointer', userSelect: 'none' }}
         onClick={e => { e.stopPropagation(); setOpenMenu(openMenu === key ? null : key) }}>
         {label}{sortCol === key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}{(colFilters[key]?.trim() || (colChecks[key] || []).length) ? ' •' : ''} <span style={{ color: 'var(--muted)' }}>▾</span>
