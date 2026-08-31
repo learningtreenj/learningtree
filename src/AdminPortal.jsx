@@ -1231,7 +1231,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
           </span>
         ))}
       </div>
-      <div className="tbl-wrap">
+      <div className="tbl-wrap sticky-head">
         <table>
           <thead><tr>
             {LEFT_COLS.map(([key, label]) => menuTh(key, label))}

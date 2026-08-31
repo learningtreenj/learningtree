@@ -73,6 +73,9 @@ nav { flex: 1; padding: 8px 0; overflow-y: auto; }
 
 /* ── TABLES ── */
 .tbl-wrap { overflow-x: auto; }
+/* Sticky header: the table scrolls inside the box and the header row stays pinned. */
+.tbl-wrap.sticky-head { max-height: calc(100vh - 250px); overflow: auto; }
+.tbl-wrap.sticky-head thead th { position: sticky; top: 0; z-index: 5; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 thead th { background: #f0f2f5; color: #444; font-weight: 700; text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
 tbody td { padding: 9px 12px; border-bottom: 1px solid #f0f2f5; vertical-align: middle; }
