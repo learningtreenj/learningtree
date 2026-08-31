@@ -1163,7 +1163,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
 
   // A sortable/filterable header cell (used for the non-eval columns).
   const menuTh = (key, label) => (
-    <th key={key} style={{ whiteSpace: 'nowrap' }}>
+    <th key={key} style={{ whiteSpace: 'nowrap', position: 'sticky', top: 0, zIndex: 6, background: '#f0f2f5' }}>
       <span style={{ cursor: 'pointer', userSelect: 'none' }}
         onClick={e => { e.stopPropagation(); setOpenMenu(openMenu === key ? null : key) }}>
         {label}{sortCol === key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}{(colFilters[key]?.trim() || (colChecks[key] || []).length) ? ' •' : ''} <span style={{ color: 'var(--muted)' }}>▾</span>
@@ -1235,7 +1235,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
         <table>
           <thead><tr>
             {LEFT_COLS.map(([key, label]) => menuTh(key, label))}
-            {EVAL_COLS.map(col => <th key={col} style={{ whiteSpace: 'nowrap', background: '#f3f6f9', textAlign: 'left' }}>{col}</th>)}
+            {EVAL_COLS.map(col => <th key={col} style={{ whiteSpace: 'nowrap', background: '#f3f6f9', textAlign: 'left', position: 'sticky', top: 0, zIndex: 6 }}>{col}</th>)}
             {RIGHT_COLS.map(([key, label]) => menuTh(key, label))}
           </tr></thead>
           <tbody>
