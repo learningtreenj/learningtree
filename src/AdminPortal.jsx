@@ -1983,7 +1983,7 @@ function ContractorList({ contractors, assignments, onChanged, languageFilter = 
       {msg && <div className={`alert alert-${msg.kind}`}>{msg.text}</div>}
       <div className="tbl-wrap">
         <table>
-          <thead><tr><th>Name</th><th>Field</th><th>Languages</th><th>County</th><th>Rate</th><th>W-9</th><th>Open Cases</th><th>Active</th><th>Portal Login</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>Field</th><th>Languages</th><th>County</th><th>Rate</th><th>Open Cases</th><th>Active</th><th>Portal Login</th><th></th></tr></thead>
           <tbody>
             {rows.map(k => {
               const isActive = k.active !== false
@@ -1994,7 +1994,6 @@ function ContractorList({ contractors, assignments, onChanged, languageFilter = 
                 <td>{[k.language, k.language_2].filter(Boolean).join(', ') || '—'}</td>
                 <td>{k.county || '—'}</td>
                 <td>{k.current_rate || '—'}</td>
-                <td>{k.w9_on_file ? '✓' : <span style={{ color: 'var(--red)' }}>✗</span>}</td>
                 <td>{openBy[k.identifier] || 0}</td>
                 <td style={{ whiteSpace: 'nowrap' }}>
                   <button type="button" disabled={busy} onClick={() => toggleActive(k, true)} title="Mark active — available for assignments" style={paidBtnStyle(true, isActive)}>Active</button>
@@ -2447,6 +2446,8 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
       if (!g) { g = { case_id: a.case_id, caseRow: a.Cases, items: [] }; idx.set(a.case_id, g); out.push(g) }
       g.items.push(a)
     }
+    // Default view: newest case numbers first.
+    out.sort((x, y) => String(y.caseRow?.case_number || '').localeCompare(String(x.caseRow?.case_number || '')))
     return out
   }, [rows])
 
