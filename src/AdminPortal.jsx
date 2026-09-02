@@ -2609,9 +2609,9 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
           <div className="card-title">Submitted Reports ({rows.length})</div>
           <div className="tbl-wrap">
             <table>
-              <thead><tr><th>Case</th><th>Student</th><th>Evaluation</th><th>Submitted</th><th>QA Status</th></tr></thead>
+              <thead><tr><th>Case</th><th>Student</th><th>District</th><th>Evaluation</th><th>Submitted</th><th>QA Status</th></tr></thead>
               <tbody>
-                {rows.length === 0 && <tr><td colSpan={5} style={{ color: '#888' }}>Nothing awaiting review.</td></tr>}
+                {rows.length === 0 && <tr><td colSpan={6} style={{ color: '#888' }}>Nothing awaiting review.</td></tr>}
                 {caseGroups.map(g => {
                   if (g.items.length === 1) {
                     const a = g.items[0]
@@ -2619,6 +2619,7 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
                       <tr key={a.id} onClick={() => openReview(a)} style={{ cursor: 'pointer', background: selectedId === a.id ? 'var(--accent-light)' : undefined }}>
                         <td><span className="tbl-link">{a.Cases?.case_number || a.case_id}</span></td>
                         <td>{a.Cases?.Student_name || '—'}</td>
+                        <td>{a.Cases?.School_district || '—'}</td>
                         <td>{a.eval_type || '—'} — {a.Contractors?.name || '—'}</td>
                         <td>{fmtDate((a.submitted_at || '').slice(0, 10))}</td>
                         <td>{qaBadge(a)}</td>
@@ -2632,6 +2633,7 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
                       <tr style={{ cursor: 'pointer' }} onClick={() => toggle(g.case_id)}>
                         <td><span className="tbl-link">{g.caseRow?.case_number || g.case_id}</span></td>
                         <td>{g.caseRow?.Student_name || '—'}</td>
+                        <td>{g.caseRow?.School_district || '—'}</td>
                         <td><span style={{ display: 'inline-block', width: 12 }}>{isOpen(g.case_id) ? '▾' : '▸'}</span>{g.items.length} evaluations</td>
                         <td>—</td>
                         <td style={{ whiteSpace: 'nowrap' }}>
@@ -2641,6 +2643,7 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
                       </tr>
                       {isOpen(g.case_id) && g.items.map(a => (
                         <tr key={a.id} onClick={() => openReview(a)} style={{ cursor: 'pointer', background: selectedId === a.id ? 'var(--accent-light)' : '#f8fafc' }}>
+                          <td></td>
                           <td></td>
                           <td></td>
                           <td style={{ paddingLeft: 24 }}>↳ {a.eval_type || '—'} — {a.Contractors?.name || '—'}</td>
