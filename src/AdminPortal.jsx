@@ -2525,6 +2525,19 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
     setBusy(false)
   }
 
+  // Manually mark a case complete from Report Review. This sets the same field the
+  // Cases page reads (sent_to_district_at) so the case shows Complete there too.
+  async function markCaseComplete(caseId, caseRow) {
+    setBusy(true); setMsg(null)
+    const now = new Date().toISOString()
+    const { error } = await supabase.from('Cases')
+      .update({ sent_to_district_at: now, Status: 'Completed' })
+      .eq('id', caseId)
+    if (error) { setMsg({ kind: 'danger', text: error.message }); setBusy(false); return }
+    setMsg({ kind: 'success', text: `${caseRow?.case_number || 'Case'} marked complete. It now shows as Complete on the Cases page.` })
+    onChanged(); setBusy(false)
+  }
+
   async function saveReview(status) {
     if (!selected) return
     setBusy(true); setMsg(null)
@@ -2721,6 +2734,21 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
                   All evaluations for <strong>{selected.Cases?.Student_name}</strong> are approved — bundle every evaluator's report into one file to send out.
                 </div>
                 <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => consolidateReports(selected.case_id, selected.Cases)}>📦 Download all reports (.zip)</button>
+                <div style={{ marginTop: 14, borderTop: '1px solid #e5e7eb', paddingTop: 12 }}>
+                  <div className="card-title" style={{ marginBottom: 6 }}>✅ Complete the Case</div>
+                  {selected.Cases?.sent_to_district_at ? (
+                    <div style={{ fontSize: 12, color: 'var(--green)' }}>
+                      ✓ This case is already marked complete (as of {fmtDate(selected.Cases.sent_to_district_at)}). It shows as Complete on the Cases page.
+                    </div>
+                  ) : (
+                    <>
+                      <div style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>
+                        Once the consolidated reports have been sent to the district, mark this case complete. It will show as Complete on the Cases page too.
+                      </div>
+                      <button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => markCaseComplete(selected.case_id, selected.Cases)}>✅ Mark Case as Complete</button>
+                    </>
+                  )}
+                </div>
               </div>
             )}
           </div>
