@@ -1816,6 +1816,12 @@ function ContractorList({ contractors, assignments, onChanged, languageFilter = 
   const [msg, setMsg] = useState(null)
   const [inviting, setInviting] = useState(null)
   const [editing, setEditing] = useState(null)   // the contractor being edited, or null
+  const [creating, setCreating] = useState(false) // true when adding a new contractor
+  function startCreate() {
+    setForm({ name: '', email: '', phone: '', company_name: '', fields: [], languages: [], county: '',
+      address: '', zip_code: '', current_rate: '', w9_on_file: false, criminal_history_done: false, NJDOE_submitted: '', active: true })
+    setMsg(null); setEditing(null); setCreating(true)
+  }
   const [form, setForm] = useState({})
   const [busy, setBusy] = useState(false)
   const setF = (k, v) => setForm(p => ({ ...p, [k]: v }))
@@ -1894,10 +1900,13 @@ function ContractorList({ contractors, assignments, onChanged, languageFilter = 
       w9_on_file: !!form.w9_on_file, criminal_history_done: !!form.criminal_history_done, NJDOE_submitted: form.NJDOE_submitted || null,
       active: form.active !== false,
     }
-    const { error } = await supabase.from('Contractors').update(patch).eq('identifier', editing.identifier)
+    const { error } = creating
+      ? await supabase.from('Contractors').insert(patch)
+      : await supabase.from('Contractors').update(patch).eq('identifier', editing.identifier)
     setBusy(false)
     if (error) { setMsg({ kind: 'danger', text: error.message }); return }
-    setEditing(null); setMsg({ kind: 'success', text: `${patch.name} updated.` }); onChanged()
+    setEditing(null); setCreating(false)
+    setMsg({ kind: 'success', text: creating ? `${patch.name} added.` : `${patch.name} updated.` }); onChanged()
   }
 
   const openBy = useMemo(() => {
@@ -1914,13 +1923,13 @@ function ContractorList({ contractors, assignments, onChanged, languageFilter = 
     .filter(k =>
       `${k.name || ''} ${k.email || ''} ${k.field || ''} ${k.language || ''} ${k.language_2 || ''} ${k.county || ''}`.toLowerCase().includes(q.toLowerCase()))
 
-  // ── Edit form ──
-  if (editing) {
+  // ── Edit / create form ──
+  if (editing || creating) {
     return (
       <div className="card" style={{ border: '2px solid var(--accent)', maxWidth: 760 }}>
         <div className="sec-head">
-          <h3>✏️ Edit Contractor — {editing.name}</h3>
-          <button className="btn btn-ghost btn-sm" onClick={() => setEditing(null)}>← Back to list</button>
+          <h3>{creating ? '➕ New Contractor' : `✏️ Edit Contractor — ${editing.name}`}</h3>
+          <button className="btn btn-ghost btn-sm" onClick={() => { setEditing(null); setCreating(false) }}>← Back to list</button>
         </div>
         {msg && <div className={`alert alert-${msg.kind}`}>{msg.text}</div>}
         <div className="form-group"><label>Name *</label><input value={form.name} onChange={e => setF('name', e.target.value)} /></div>
@@ -1955,8 +1964,8 @@ function ContractorList({ contractors, assignments, onChanged, languageFilter = 
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
-          <button className="btn btn-primary" disabled={busy} onClick={saveEdit}>{busy ? 'Saving…' : 'Save Changes'}</button>
-          <button className="btn btn-ghost" disabled={busy} onClick={() => setEditing(null)}>Cancel</button>
+          <button className="btn btn-primary" disabled={busy} onClick={saveEdit}>{busy ? 'Saving…' : (creating ? 'Add Contractor' : 'Save Changes')}</button>
+          <button className="btn btn-ghost" disabled={busy} onClick={() => { setEditing(null); setCreating(false) }}>Cancel</button>
         </div>
       </div>
     )
@@ -1967,8 +1976,9 @@ function ContractorList({ contractors, assignments, onChanged, languageFilter = 
     <div className="card">
       <div className="sec-head">
         <h3>{rows.length} contractor{rows.length === 1 ? '' : 's'}</h3>
-        <div className="filter-bar" style={{ margin: 0 }}>
+        <div className="filter-bar" style={{ margin: 0, display: 'flex', gap: 8, alignItems: 'center' }}>
           <input type="text" placeholder="🔍 Name, field, language, county…" value={q} onChange={e => setQ(e.target.value)} />
+          <button className="btn btn-primary btn-sm" onClick={startCreate}>➕ New Contractor</button>
         </div>
       </div>
       {languageFilter && (

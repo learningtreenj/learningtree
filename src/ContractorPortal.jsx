@@ -171,6 +171,10 @@ function AssignmentDetail({ assignment, contractor, onBack }) {
     else {
       setAcceptance(patch.acceptance_status)
       setDeclining(false)
+      // Email the office so an admin can reassign the case (non-blocking, best-effort)
+      if (action === 'decline') {
+        try { await supabase.functions.invoke('notify-assignment-declined', { body: { assignment_id: a.id } }) } catch { /* best-effort */ }
+      }
       setMsg(action === 'accept'
         ? { kind: 'success', text: 'Assignment accepted — thank you! Please contact the family to schedule testing.' }
         : { kind: 'info', text: 'Assignment declined. The office has been notified and will reassign the case.' })
