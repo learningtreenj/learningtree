@@ -188,6 +188,11 @@ function AssignmentDetail({ assignment, contractor, onBack }) {
       setMsg({ kind: 'warn', text: 'Please upload your completed report before marking this Submitted — a report attachment is required.' })
       return false
     }
+    // The testing date is required to submit a report.
+    if ((status || '').toLowerCase() === 'submitted' && !testingDate) {
+      setMsg({ kind: 'warn', text: 'Please enter the Testing Date before submitting — it is required.' })
+      return false
+    }
     setBusy(true); setMsg(null)
     const patch = { status, testing_date: testingDate || null, notes: notes || null, ...extra }
     const { error } = await supabase.from('Assignments').update(patch).eq('id', a.id)
@@ -199,6 +204,11 @@ function AssignmentDetail({ assignment, contractor, onBack }) {
   async function uploadReports(fileList) {
     const files = Array.from(fileList || [])
     if (!files.length) return
+    // The testing date is required — uploading a report marks the assignment Submitted.
+    if (!testingDate) {
+      setMsg({ kind: 'warn', text: 'Please enter the Testing Date above before uploading your report — it is required to submit.' })
+      return
+    }
     setBusy(true); setMsg(null)
     const uploaded = []
     for (const file of files) {
@@ -360,8 +370,9 @@ function AssignmentDetail({ assignment, contractor, onBack }) {
               </select>
             </div>
             <div className="form-group">
-              <label>Testing Date</label>
-              <input type="date" value={testingDate} onChange={e => setTestingDate(e.target.value)} />
+              <label>Testing Date <span style={{ color: 'var(--red)' }}>*</span></label>
+              <input type="date" value={testingDate} onChange={e => setTestingDate(e.target.value)} required />
+              <div style={{ fontSize: 11, color: '#888', marginTop: 3 }}>Required before you can submit your report.</div>
             </div>
             <div className="form-group">
               <label>Notes</label>

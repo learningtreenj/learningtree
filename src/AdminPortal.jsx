@@ -1337,6 +1337,10 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
   const [editAsgId, setEditAsgId] = useState(null)   // assignment being reassigned
   const [reassignTo, setReassignTo] = useState('')
   const [confirmRemoveId, setConfirmRemoveId] = useState(null)
+  const [editTestingId, setEditTestingId] = useState(null)   // assignment whose testing date is being edited
+  const [testingVal, setTestingVal] = useState('')
+  // Local mirror of assignment testing dates so admin edits show immediately.
+  const [testingOverride, setTestingOverride] = useState({})
   const [form, setForm] = useState({})
   const [evalTypes, setEvalTypes] = useState([])   // checked standard types
   const [extraEvals, setExtraEvals] = useState([]) // non-standard tokens, preserved as-is
@@ -1423,6 +1427,22 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
       onChanged()
     }
     setBusy(false)
+  }
+
+  function startEditTesting(a) {
+    setEditTestingId(a.id)
+    setTestingVal((testingOverride[a.id] ?? a.testing_date ?? '').slice(0, 10))
+    setEditAsgId(null); setConfirmRemoveId(null); setMsg(null)
+  }
+  async function saveTestingDate(a) {
+    setBusy(true); setMsg(null)
+    const val = testingVal || null
+    const { error } = await supabase.from('Assignments').update({ testing_date: val }).eq('id', a.id)
+    if (error) { setMsg({ kind: 'danger', text: error.message }); setBusy(false); return }
+    setTestingOverride(prev => ({ ...prev, [a.id]: val }))
+    setEditTestingId(null)
+    setMsg({ kind: 'success', text: `Testing date updated for ${a.Contractors?.name || a.eval_type || 'assignment'}.` })
+    onChanged(); setBusy(false)
   }
 
   async function deleteCase() {
@@ -1680,7 +1700,17 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
                         <td>{a.eval_type || '—'}</td>
                         <td><AcceptBadge a={a} /></td>
                         <td style={dueColor(a.report_due_date)}>{fmtDate(a.report_due_date)}</td>
-                        <td>{a.testing_date ? fmtDate(a.testing_date) : '—'}</td>
+                        <td>{editTestingId === a.id ? (
+                          <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center', whiteSpace: 'nowrap' }}>
+                            <input type="date" value={testingVal} onChange={e => setTestingVal(e.target.value)} style={{ padding: '3px 5px', fontSize: 12 }} />
+                            <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => saveTestingDate(a)}>Save</button>
+                            <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setEditTestingId(null)}>✕</button>
+                          </span>
+                        ) : (
+                          <span className="tbl-link" title="Click to edit the testing date" onClick={() => startEditTesting(a)}>
+                            {(() => { const d = testingOverride[a.id] ?? a.testing_date; return d ? fmtDate(d) : <span style={{ color: 'var(--muted)' }}>— set</span> })()}
+                          </span>
+                        )}</td>
                         <td><Badge status={a.status} /></td>
                         <td>{(() => {
                           const files = Array.isArray(a.report_files) && a.report_files.length
