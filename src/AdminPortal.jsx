@@ -2038,24 +2038,35 @@ function InvoiceList({ invoices, cases, onChanged }) {
   const [busy, setBusy] = useState(false)
   const [confirmDel, setConfirmDel] = useState(null)
   const [q, setQ] = useState('')
+  const [districtSel, setDistrictSel] = useState('')
 
   const caseById = useMemo(() => new Map(cases.map(c => [c.id, c])), [cases])
 
-  // Invoice # / student fall back to the linked case for older rows recorded
-  // before those columns existed.
+  // Invoice # / student / district fall back to the linked case for older rows
+  // recorded before those columns existed.
+  const mapped = useMemo(() => invoices.map(inv => {
+    const c = inv.case_id ? caseById.get(inv.case_id) : null
+    return {
+      ...inv,
+      _number: inv.invoice_number || (c?.invoice_seq ? `${c.case_number || c.id}-${c.invoice_seq}` : `—`),
+      _student: inv.student_name || c?.Student_name || '—',
+      _district: inv.district_name || c?.School_district || '',
+    }
+  }), [invoices, caseById])
+
+  // Distinct school districts across all invoices, for the filter dropdown.
+  const districtOptions = useMemo(
+    () => [...new Set(mapped.map(r => r._district).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
+    [mapped])
+
   const rows = useMemo(() => {
-    const list = invoices.map(inv => {
-      const c = inv.case_id ? caseById.get(inv.case_id) : null
-      return {
-        ...inv,
-        _number: inv.invoice_number || (c?.invoice_seq ? `${c.case_number || c.id}-${c.invoice_seq}` : `—`),
-        _student: inv.student_name || c?.Student_name || '—',
-      }
-    })
     const needle = q.trim().toLowerCase()
-    if (!needle) return list
-    return list.filter(r => [r._number, r._student, r.district_name, r.status].some(v => String(v || '').toLowerCase().includes(needle)))
-  }, [invoices, caseById, q])
+    return mapped.filter(r => {
+      if (districtSel && r._district !== districtSel) return false
+      if (needle && ![r._number, r._student, r._district, r.status].some(v => String(v || '').toLowerCase().includes(needle))) return false
+      return true
+    })
+  }, [mapped, q, districtSel])
 
   const totals = useMemo(() => {
     const sum = (pred) => rows.filter(pred).reduce((t, r) => t + Number(r.amount || 0), 0)
@@ -2149,7 +2160,13 @@ function InvoiceList({ invoices, cases, onChanged }) {
       <div className="card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <div className="card-title" style={{ marginBottom: 0 }}>Invoices</div>
-          <input placeholder="Search # / student / district…" value={q} onChange={e => setQ(e.target.value)} style={{ maxWidth: 240 }} />
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+            <select value={districtSel} onChange={e => setDistrictSel(e.target.value)} style={{ maxWidth: 220 }}>
+              <option value="">All districts</option>
+              {districtOptions.map(d => <option key={d} value={d}>{d}</option>)}
+            </select>
+            <input placeholder="Search # / student / district…" value={q} onChange={e => setQ(e.target.value)} style={{ maxWidth: 240 }} />
+          </div>
         </div>
         <div style={{ display: 'flex', gap: 18, margin: '10px 0 4px', fontSize: 13, color: '#555', flexWrap: 'wrap' }}>
           <span>Total <strong>${totals.all.toLocaleString()}</strong></span>
