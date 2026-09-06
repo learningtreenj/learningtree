@@ -492,14 +492,15 @@ function Earnings({ earnings, assignments, contractor }) {
         <div className="card-title">Earnings</div>
         <div className="tbl-wrap">
           <table>
-            <thead><tr><th>Case</th><th>Eval Type</th><th>Date</th><th>Amount</th><th>Status</th><th>Payout Batch</th></tr></thead>
+            <thead><tr><th>Case</th><th>Student</th><th>Eval Type</th><th>Date</th><th>Amount</th><th>Status</th><th>Payout Batch</th></tr></thead>
             <tbody>
-              {earnings.length === 0 && <tr><td colSpan={6} style={{ color: '#888' }}>No approved earnings yet. Earnings appear after your submitted reports pass review.</td></tr>}
+              {earnings.length === 0 && <tr><td colSpan={7} style={{ color: '#888' }}>No approved earnings yet. Earnings appear after your submitted reports pass review.</td></tr>}
               {earnings.map(e => {
                 const a = byAssignment.get(e.assignment_id)
                 return (
                   <tr key={e.id}>
                     <td>{a?.Cases?.case_number || '—'}</td>
+                    <td>{a?.Cases?.Student_name || '—'}</td>
                     <td>{a?.eval_type || '—'}</td>
                     <td>{fmtDate(e.billable_date)}</td>
                     <td style={{ fontWeight: 700 }}>${Number(e.amount || 0).toLocaleString()}</td>
