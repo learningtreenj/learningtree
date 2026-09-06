@@ -997,14 +997,65 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
   }, [assignments])
 
   // Manually mark whether the school district has paid Learning Tree for a case.
-  async function setDistrictPaid(c, paid) {
+  // ── Mail Date: Excel-style select / copy / paste across rows ──
+  const [mailSel, setMailSel] = useState(new Set()) // selected case ids
+  const [mailActive, setMailActive] = useState(null) // anchor case id
+  const [mailClip, setMailClip] = useState(null)     // copied date (ISO) or null
+  const [editMailId, setEditMailId] = useState(null) // case whose date is being typed
+  const [mailOverride, setMailOverride] = useState({}) // instant display after a write
+  const mailVal = c => (c.id in mailOverride ? mailOverride[c.id] : (c.mail_date ? String(c.mail_date).slice(0, 10) : ''))
+
+  async function writeMailDates(ids, val) {
+    if (!ids.length) return
+    setMailOverride(prev => { const n = { ...prev }; ids.forEach(id => { n[id] = val || '' }); return n })
     setRowBusy(true); setRowMsg(null)
-    const { error } = await supabase.from('Cases')
-      .update({ district_paid: paid, district_paid_at: paid ? new Date().toISOString() : null })
-      .eq('id', c.id)
+    const { error } = await supabase.from('Cases').update({ mail_date: val || null }).in('id', ids)
     if (error) setRowMsg({ kind: 'danger', text: error.message })
+    else setRowMsg({ kind: 'success', text: `Mail date ${val ? `set for ${ids.length} case${ids.length === 1 ? '' : 's'}` : 'cleared'}.` })
     onChanged && onChanged(); setRowBusy(false)
   }
+
+  function mailCellClick(e, c, orderedIds) {
+    e.stopPropagation()
+    if (e.shiftKey && mailActive != null) {
+      const a = orderedIds.indexOf(mailActive), b = orderedIds.indexOf(c.id)
+      if (a !== -1 && b !== -1) {
+        const [lo, hi] = a < b ? [a, b] : [b, a]
+        setMailSel(new Set(orderedIds.slice(lo, hi + 1)))
+      }
+    } else if (e.ctrlKey || e.metaKey) {
+      setMailSel(prev => { const n = new Set(prev); n.has(c.id) ? n.delete(c.id) : n.add(c.id); return n })
+      setMailActive(c.id)
+    } else {
+      setMailSel(new Set([c.id])); setMailActive(c.id)
+    }
+  }
+
+  // Keyboard: copy / paste / fill / clear the mail-date selection.
+  useEffect(() => {
+    function onKey(e) {
+      const t = e.target
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return
+      if (!mailSel.size) return
+      const meta = e.ctrlKey || e.metaKey
+      const key = e.key.toLowerCase()
+      if (meta && key === 'c') {
+        const src = mailActive != null ? cases.find(c => c.id === mailActive) : null
+        const v = src ? mailVal(src) : ''
+        setMailClip(v); try { navigator.clipboard.writeText(fmtDate(v) || '') } catch { /* ignore */ }
+        setRowMsg({ kind: 'info', text: v ? `Copied ${fmtDate(v)}` : 'Copied (blank)' }); e.preventDefault()
+      } else if (meta && key === 'v') {
+        if (mailClip != null) writeMailDates([...mailSel], mailClip); e.preventDefault()
+      } else if (meta && key === 'd') {
+        const src = mailActive != null ? cases.find(c => c.id === mailActive) : null
+        writeMailDates([...mailSel], src ? mailVal(src) : ''); e.preventDefault()
+      } else if (key === 'delete' || key === 'backspace') {
+        writeMailDates([...mailSel], ''); e.preventDefault()
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [mailSel, mailActive, mailClip, cases, mailOverride])
 
   // ── Inline due-date editing ──
   const [editDueId, setEditDueId] = useState(null)
@@ -1074,7 +1125,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
 
   // Non-eval columns keep the sort/filter menus. Eval types are their own fixed columns.
   const LEFT_COLS = [['case_number', 'Case #'], ['Student_name', 'Student'], ['School_district', 'District']]
-  const RIGHT_COLS = [['Report_Due_date', 'Due Date'], ['status', 'Status'], ['district_paid', 'District Paid']]
+  const RIGHT_COLS = [['Report_Due_date', 'Due Date'], ['status', 'Status'], ['mail_date', 'Mail Date']]
   const CHECKBOX_COLS = { School_district: true, status: true }
   const districtOptions = useMemo(() => [...new Set(cases.map(c => (c.School_district || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [cases])
   // Case-level status is now just In Progress / Complete (Complete = all reports received).
@@ -1112,7 +1163,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
       case 'Report_Due_date': return c.Report_Due_date || ''       // ISO date sorts lexically
       case 'assignments': return asg.length                        // numeric
       case 'status': return caseProgressText(c, asg).toLowerCase()
-      case 'district_paid': return c.district_paid ? 'yes' : 'no'
+      case 'mail_date': return c.mail_date || ''
       case 'case_number': return String(c.case_number ?? '').toLowerCase()
       case 'Student_name': return String(c.Student_name ?? '').toLowerCase()
       case 'School_district': return String(c.School_district ?? '').toLowerCase()
@@ -1123,7 +1174,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
   function colFilterVal(col, c) {
     const asg = byCase[c.id] || []
     if (col === 'assignments') return asg.map(a => `${a.eval_type || ''} ${a.Contractors?.name || ''}`).join(' ').toLowerCase()
-    if (col === 'district_paid') return c.district_paid ? 'yes' : 'no'
+    if (col === 'mail_date') return `${c.mail_date || ''} ${fmtDate(c.mail_date)}`.toLowerCase()
     if (col === 'Report_Due_date') return `${c.Report_Due_date || ''} ${fmtDate(c.Report_Due_date)}`.toLowerCase()
     return String(colSortVal(col, c)).toLowerCase()
   }
@@ -1160,6 +1211,10 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
       return sortDir === 'desc' ? -cmp : cmp
     })
   }
+
+  // Visible rows (capped) and their id order — used for shift-click ranges on Mail Date.
+  const visibleRows = rows.slice(0, 200)
+  const orderedMailIds = visibleRows.map(c => c.id)
 
   // A sortable/filterable header cell (used for the non-eval columns).
   const menuTh = (key, label) => (
@@ -1230,6 +1285,9 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
             {label}
           </span>
         ))}
+        <span style={{ color: 'var(--muted)', marginLeft: 'auto' }}>
+          <b style={{ color: '#555' }}>Mail Date:</b> click to select · Shift/Ctrl-click for many · double-click to set · Ctrl+C / Ctrl+V to copy across
+        </span>
       </div>
       <div className="tbl-wrap sticky-head">
         <table>
@@ -1241,7 +1299,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
           <tbody>
             {loading && <tr><td colSpan={COLSPAN} style={{ color: '#888' }}>Loading…</td></tr>}
             {!loading && rows.length === 0 && <tr><td colSpan={COLSPAN} style={{ color: '#888' }}>No cases match.</td></tr>}
-            {rows.slice(0, 200).map(c => {
+            {visibleRows.map(c => {
               const asg = byCase[c.id] || []
               const statusLbl = caseStatusLabel(c, asg)
               const complete = statusLbl === 'Complete'
@@ -1296,14 +1354,29 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
                       : <span className="tbl-link" title="Click to edit due date" onClick={() => setEditDueId(c.id)}>{fmtDate(c.Report_Due_date) || 'Set date'}</span>}
                   </td>
                   <td><span className={`badge-s ${progress === 'Complete' ? 's-completed' : 's-drafting'}`}>{progress}</span></td>
-                  <td style={{ whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
-                    <button type="button" disabled={rowBusy} onClick={() => setDistrictPaid(c, true)}
-                      title="School district has paid Learning Tree"
-                      style={paidBtnStyle(true, c.district_paid === true)}>Yes</button>
-                    {' '}
-                    <button type="button" disabled={rowBusy} onClick={() => setDistrictPaid(c, false)}
-                      title="Not yet paid by the school district"
-                      style={paidBtnStyle(false, !c.district_paid)}>No</button>
+                  <td style={{ whiteSpace: 'nowrap', padding: '6px 8px' }}
+                    onClick={e => { if (editMailId !== c.id) mailCellClick(e, c, orderedMailIds) }}>
+                    {editMailId === c.id ? (
+                      <input type="date" autoFocus defaultValue={mailVal(c)} disabled={rowBusy}
+                        onClick={e => e.stopPropagation()}
+                        onChange={e => { writeMailDates([c.id], e.target.value); setEditMailId(null) }}
+                        onBlur={() => setEditMailId(null)}
+                        style={{ padding: '2px 4px', fontSize: 12 }} />
+                    ) : (
+                      <span
+                        onDoubleClick={e => { e.stopPropagation(); setEditMailId(c.id) }}
+                        title="Click to select · double-click to set a date · copy/paste across selected cells"
+                        style={{
+                          display: 'inline-block', minWidth: 92, textAlign: 'center', cursor: 'cell',
+                          padding: '3px 8px', borderRadius: 6, fontSize: 12.5, fontVariantNumeric: 'tabular-nums',
+                          border: `1px solid ${mailSel.has(c.id) ? 'var(--accent)' : 'var(--border)'}`,
+                          background: mailSel.has(c.id) ? 'var(--accent-light)' : '#fff',
+                          boxShadow: mailActive === c.id ? 'inset 0 0 0 1px var(--accent)' : 'none',
+                          color: mailVal(c) ? '#1c2330' : '#9aa1ab',
+                        }}>
+                        {mailVal(c) ? fmtDate(mailVal(c)) : '— set'}
+                      </span>
+                    )}
                   </td>
                 </tr>
               )
