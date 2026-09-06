@@ -2,7 +2,7 @@ import { Fragment, useEffect, useMemo, useState } from 'react'
 import { supabase, fetchAll, STATUSES, fmtDate, daysLeft, dueColor, parseRate, toISODate } from './supabase.js'
 import { Shell, Badge, StatCard, Meta } from './ui.jsx'
 import { generateInvoiceDoc, RATE_PER_EVAL } from './invoice.js'
-import { getRate, invalidateRates } from './rates.js'
+import { getRate, invalidateRates, loadRates, rateForLanguage } from './rates.js'
 import DistrictHeatmap from './DistrictHeatmap.jsx'
 import { contractorLanguages, contractorSpeaks } from './contractorLangs.js'
 import { scoreContractors } from './smartAssign.js'
@@ -224,7 +224,7 @@ export default function AdminPortal({ user }) {
     setLoading(true)
     const [c, a, k, i, q, e, b, m] = await Promise.all([
       fetchAll(() => supabase.from('Cases').select('*').order('id', { ascending: false })),
-      fetchAll(() => supabase.from('Assignments').select('*, Contractors(identifier, name, current_rate, email), Cases(id, case_number, Student_name, School_district, Language, County, district_paid)').order('report_due_date', { ascending: true, nullsFirst: false }).order('id')),
+      fetchAll(() => supabase.from('Assignments').select('*, Contractors(identifier, name, current_rate, email), Cases(id, case_number, Student_name, School_district, Language, County, district_paid, district_payment_date, invoice_seq)').order('report_due_date', { ascending: true, nullsFirst: false }).order('id')),
       fetchAll(() => supabase.from('Contractors').select('*').order('name').order('identifier')),
       fetchAll(() => supabase.from('Invoices').select('*').order('id', { ascending: false })),
       fetchAll(() => supabase.from('qa_reviews').select('*').order('assignment_id')),
@@ -2384,6 +2384,119 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
   const unbatched = earnings.filter(e => e.status === 'pending' && !e.payment_batch_id)
   const unbatchedTotal = unbatched.reduce((n, e) => n + Number(e.amount || 0), 0)
 
+  // ── All Earnings: permanent running ledger, one row per case/invoice ──
+  const [rateMap, setRateMap] = useState({})
+  useEffect(() => { loadRates().then(setRateMap) }, [])
+
+  // Group every assigned evaluator by case (a case appears once it has an assignment).
+  const caseGroups = useMemo(() => {
+    const idx = new Map(); const out = []
+    for (const a of assignments) {
+      if (a.contractor_id == null) continue
+      let g = idx.get(a.case_id)
+      if (!g) { g = { case_id: a.case_id, caseRow: a.Cases || {}, items: [] }; idx.set(a.case_id, g); out.push(g) }
+      g.items.push(a)
+    }
+    out.sort((x, y) => String(y.caseRow?.case_number || '').localeCompare(String(x.caseRow?.case_number || '')))
+    return out
+  }, [assignments])
+
+  const invNo = c => c?.invoice_seq ? `${c.case_number || c.id}-${c.invoice_seq}` : (c?.case_number || '—')
+  const evalRate = g => rateForLanguage(g.caseRow?.Language, rateMap)
+  const expectedIncome = g => evalRate(g) * g.items.length
+
+  // Flat, stable order of every editable date cell (district payment, then its evaluators).
+  const cellOrder = useMemo(() => {
+    const keys = []
+    for (const g of caseGroups) { keys.push(`d:${g.case_id}`); for (const a of g.items) keys.push(`e:${a.id}`) }
+    return keys
+  }, [caseGroups])
+
+  const [sel, setSel] = useState(new Set())      // selected cell keys
+  const [active, setActive] = useState(null)     // anchor key
+  const [clip, setClip] = useState(null)         // copied ISO date or ''
+  const [editKey, setEditKey] = useState(null)   // cell being typed
+  const [dateOverride, setDateOverride] = useState({}) // key -> ISO for instant display
+
+  const cellVal = key => {
+    if (key in dateOverride) return dateOverride[key]
+    const [t, id] = key.split(':')
+    if (t === 'd') { const g = caseGroups.find(x => String(x.case_id) === id); const d = g?.caseRow?.district_payment_date; return d ? String(d).slice(0, 10) : '' }
+    const a = assignmentById.get(Number(id)); const d = a?.paid_date; return d ? String(d).slice(0, 10) : ''
+  }
+
+  async function writeDates(keys, val) {
+    if (!keys.length) return
+    setDateOverride(prev => { const n = { ...prev }; keys.forEach(k => { n[k] = val || '' }); return n })
+    setBusy(true); setMsg(null)
+    const caseIds = keys.filter(k => k[0] === 'd').map(k => Number(k.slice(2)))
+    const asgIds = keys.filter(k => k[0] === 'e').map(k => Number(k.slice(2)))
+    let err = null
+    if (caseIds.length) { const { error } = await supabase.from('Cases').update({ district_payment_date: val || null }).in('id', caseIds); if (error) err = error }
+    if (asgIds.length) { const { error } = await supabase.from('Assignments').update({ paid_date: val || null }).in('id', asgIds); if (error) err = error }
+    if (err) setMsg({ kind: 'danger', text: err.message })
+    else setMsg({ kind: 'success', text: `Date ${val ? 'set' : 'cleared'} for ${keys.length} cell${keys.length === 1 ? '' : 's'}.` })
+    onChanged(); setBusy(false)
+  }
+
+  function cellClick(e, key) {
+    e.stopPropagation()
+    if (e.shiftKey && active) {
+      const a = cellOrder.indexOf(active), b = cellOrder.indexOf(key)
+      if (a !== -1 && b !== -1) { const [lo, hi] = a < b ? [a, b] : [b, a]; setSel(new Set(cellOrder.slice(lo, hi + 1))) }
+    } else if (e.ctrlKey || e.metaKey) {
+      setSel(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n }); setActive(key)
+    } else { setSel(new Set([key])); setActive(key) }
+  }
+
+  useEffect(() => {
+    function onKey(e) {
+      const t = e.target
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return
+      if (!sel.size) return
+      const meta = e.ctrlKey || e.metaKey; const key = e.key.toLowerCase()
+      if (meta && key === 'c') { const v = active ? cellVal(active) : ''; setClip(v); try { navigator.clipboard.writeText(fmtDate(v) || '') } catch { /* ignore */ } setMsg({ kind: 'info', text: v ? `Copied ${fmtDate(v)}` : 'Copied (blank)' }); e.preventDefault() }
+      else if (meta && key === 'v') { if (clip != null) writeDates([...sel], clip); e.preventDefault() }
+      else if (meta && key === 'd') { writeDates([...sel], active ? cellVal(active) : ''); e.preventDefault() }
+      else if (key === 'delete' || key === 'backspace') { writeDates([...sel], ''); e.preventDefault() }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [sel, active, clip, caseGroups, dateOverride])
+
+  const dateCell = (key) => {
+    if (editKey === key) {
+      return <input type="date" autoFocus defaultValue={cellVal(key)} disabled={busy}
+        onClick={e => e.stopPropagation()}
+        onChange={e => { writeDates([key], e.target.value); setEditKey(null) }}
+        onBlur={() => setEditKey(null)}
+        style={{ padding: '2px 4px', fontSize: 12 }} />
+    }
+    const v = cellVal(key); const isSel = sel.has(key); const isActive = active === key
+    return (
+      <span onClick={e => cellClick(e, key)} onDoubleClick={e => { e.stopPropagation(); setEditKey(key) }}
+        title="Click to select · double-click to set a date · Ctrl+C / Ctrl+V to copy across selected cells"
+        style={{
+          display: 'inline-block', minWidth: 96, textAlign: 'center', cursor: 'cell', userSelect: 'none',
+          padding: '3px 8px', borderRadius: 6, fontSize: 12.5, fontVariantNumeric: 'tabular-nums',
+          border: `1px solid ${isSel ? 'var(--accent)' : 'var(--border)'}`, background: isSel ? 'var(--accent-light)' : '#fff',
+          boxShadow: isActive ? 'inset 0 0 0 1px var(--accent)' : 'none', color: v ? 'var(--green)' : '#9aa1ab', fontWeight: v ? 650 : 400,
+        }}>
+        {v ? fmtDate(v) : '— set'}
+      </span>
+    )
+  }
+
+  const ledgerTotals = useMemo(() => {
+    let income = 0, dPaid = 0, evalPaid = 0, evalCount = 0
+    for (const g of caseGroups) {
+      income += expectedIncome(g)
+      if (cellVal(`d:${g.case_id}`)) dPaid++
+      for (const a of g.items) { evalCount++; if (cellVal(`e:${a.id}`)) evalPaid++ }
+    }
+    return { income, dPaid, evalPaid, evalCount }
+  }, [caseGroups, rateMap, dateOverride])
+
   async function createBatch() {
     setBusy(true); setMsg(null)
     const month = new Date().toISOString().slice(0, 7)
@@ -2500,31 +2613,60 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
       </div>
 
       <div className="card">
-        <div className="card-title">All Earnings ({earnings.length})</div>
+        <div className="sec-head" style={{ marginBottom: 6 }}>
+          <div className="card-title" style={{ marginBottom: 0 }}>All Earnings ({caseGroups.length} case{caseGroups.length === 1 ? '' : 's'})</div>
+          <span style={{ fontSize: 12, color: 'var(--muted)' }}>
+            Running list — nothing drops off. Click a date · Shift/Ctrl-click for many · double-click to set · Ctrl+C / Ctrl+V to copy across
+          </span>
+        </div>
         <div className="tbl-wrap">
           <table>
-            <thead><tr><th>Contractor</th><th>Case</th><th>Student</th><th>Eval Type</th><th>Date</th><th>Amount</th><th>Status</th><th>Invoice Month</th></tr></thead>
+            <thead><tr>
+              <th>Invoice #</th><th>Student Name</th><th>School District</th>
+              <th style={{ textAlign: 'right' }}>Expected Income</th><th>Evaluators</th>
+            </tr></thead>
             <tbody>
-              {earnings.length === 0 && <tr><td colSpan={8} style={{ color: '#888' }}>No earnings yet — approve submitted reports in Report Review to create them.</td></tr>}
-              {earnings.map(e => {
-                const k = contractorById.get(e.contractor_id)
-                const a = assignmentById.get(e.assignment_id)
-                return (
-                  <tr key={e.id}>
-                    <td style={{ fontWeight: 600 }}>{k?.name || e.contractor_id}</td>
-                    <td>{a?.Cases?.case_number || '—'}</td>
-                    <td>{a?.Cases?.Student_name || '—'}</td>
-                    <td>{a?.eval_type || '—'}</td>
-                    <td>{fmtDate(e.billable_date)}</td>
-                    <td>${Number(e.amount || 0).toLocaleString()}</td>
-                    <td><Badge status={e.status} /></td>
-                    <td>{e.payment_batch_id ? monthMMYYYY(batchById.get(e.payment_batch_id)?.batch_month) : '—'}</td>
-                  </tr>
-                )
-              })}
+              {caseGroups.length === 0 && <tr><td colSpan={5} style={{ color: '#888' }}>No assigned cases yet — assign a contractor to a case and it appears here.</td></tr>}
+              {caseGroups.map(g => (
+                <tr key={g.case_id}>
+                  <td style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 700, whiteSpace: 'nowrap' }}>{invNo(g.caseRow)}</td>
+                  <td>{g.caseRow?.Student_name || '—'}</td>
+                  <td>{g.caseRow?.School_district || '—'}</td>
+                  <td style={{ textAlign: 'right', verticalAlign: 'top' }}>
+                    <div style={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>${expectedIncome(g).toLocaleString()}</div>
+                    <div style={{ fontSize: 11, color: 'var(--muted)' }}>{g.items.length} eval{g.items.length > 1 ? 's' : ''} × ${evalRate(g).toLocaleString()}</div>
+                    <div style={{ marginTop: 8 }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--muted)', marginBottom: 3 }}>Date Paid</div>
+                      {dateCell(`d:${g.case_id}`)}
+                    </div>
+                  </td>
+                  <td>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '2px 14px', alignItems: 'center', minWidth: 320 }}>
+                      <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--muted)', borderBottom: '1px dashed var(--border)', paddingBottom: 4 }}>Evaluator · Evaluation</div>
+                      <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.05em', color: 'var(--muted)', borderBottom: '1px dashed var(--border)', paddingBottom: 4, textAlign: 'center' }}>Paid</div>
+                      {g.items.map(a => (
+                        <Fragment key={a.id}>
+                          <div style={{ padding: '3px 0' }}>
+                            <span style={{ fontWeight: 650 }}>{a.Contractors?.name || 'Unassigned'}</span>
+                            {' '}<span className="badge-s s-assigned" style={{ fontSize: 10 }}>{a.eval_type || '—'}</span>
+                          </div>
+                          {dateCell(`e:${a.id}`)}
+                        </Fragment>
+                      ))}
+                    </div>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
+        {caseGroups.length > 0 && (
+          <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap', marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border)', fontSize: 13 }}>
+            <span><span style={{ color: 'var(--muted)', marginRight: 6 }}>Total expected income</span><strong style={{ fontVariantNumeric: 'tabular-nums' }}>${ledgerTotals.income.toLocaleString()}</strong></span>
+            <span><span style={{ color: 'var(--muted)', marginRight: 6 }}>District payments received</span><strong>{ledgerTotals.dPaid} / {caseGroups.length}</strong></span>
+            <span><span style={{ color: 'var(--muted)', marginRight: 6 }}>Evaluators paid</span><strong>{ledgerTotals.evalPaid} / {ledgerTotals.evalCount}</strong></span>
+          </div>
+        )}
       </div>
     </>
   )
