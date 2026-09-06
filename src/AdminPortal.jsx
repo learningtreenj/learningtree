@@ -2900,6 +2900,21 @@ function EmailLog({ emailLog, assignments, onChanged }) {
     setBusy(false)
   }
 
+  const [acceptBusy, setAcceptBusy] = useState(false)
+  const [acceptResult, setAcceptResult] = useState(null)
+  const [acceptMsg, setAcceptMsg] = useState(null)
+  async function runAcceptance(dryRun) {
+    setAcceptBusy(true); setAcceptMsg(null); setAcceptResult(null)
+    const { data, error } = await supabase.functions.invoke('send-acceptance-reminders', { body: { dry_run: dryRun } })
+    if (error || !data?.success) {
+      setAcceptMsg({ kind: 'danger', text: data?.error || error?.message || 'Acceptance reminder run failed.' })
+    } else {
+      setAcceptResult(data)
+      if (!dryRun) onChanged()
+    }
+    setAcceptBusy(false)
+  }
+
   return (
     <>
       <div className="card" style={{ marginBottom: 14, border: '2px solid var(--accent)' }}>
@@ -2944,6 +2959,49 @@ function EmailLog({ emailLog, assignments, onChanged }) {
           </div>
         )}
       </div>
+      <div className="card" style={{ marginBottom: 14, border: '2px solid var(--accent)' }}>
+        <div className="card-title">🤝 Acceptance Reminders</div>
+        <div style={{ fontSize: 13, color: '#555', marginBottom: 10 }}>
+          A reminder goes out automatically every weekday morning (8am ET) to any contractor who still
+          hasn&apos;t accepted or declined an assignment <strong>3 business days</strong> after it was sent.
+          Each assignment is reminded once. Use <strong>Preview</strong> to see who would get one today.
+        </div>
+        {acceptMsg && <div className={`alert alert-${acceptMsg.kind}`}>{acceptMsg.text}</div>}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button className="btn btn-secondary btn-sm" disabled={acceptBusy} onClick={() => runAcceptance(true)}>👁 Preview</button>
+          <button className="btn btn-primary btn-sm" disabled={acceptBusy} onClick={() => runAcceptance(false)}>📤 Send now</button>
+        </div>
+        {acceptResult && (
+          <div style={{ marginTop: 12 }}>
+            {acceptResult.redirect_active && (
+              <div className="alert alert-warn">🧪 Test mode is ON — every email is redirected to <strong>{acceptResult.redirect_to}</strong> instead of the contractor.</div>
+            )}
+            <div style={{ fontSize: 13, marginBottom: 6 }}>
+              {acceptResult.dry_run ? 'Would send' : 'Sent'} <strong>{acceptResult.dry_run ? acceptResult.matched : acceptResult.sent}</strong> reminder{(acceptResult.dry_run ? acceptResult.matched : acceptResult.sent) === 1 ? '' : 's'}
+              {' '}(≥ {acceptResult.threshold_business_days} business days unaccepted; from: {acceptResult.from})
+            </div>
+            {acceptResult.results.length > 0 && (
+              <div className="tbl-wrap">
+                <table>
+                  <thead><tr><th>Case</th><th>Contractor</th><th>Bus. days</th><th>To</th><th>Status</th></tr></thead>
+                  <tbody>
+                    {acceptResult.results.map((r, i) => (
+                      <tr key={i}>
+                        <td>{r.case_number || r.assignment_id}</td>
+                        <td>{r.contractor || '—'}</td>
+                        <td>{r.days}</td>
+                        <td style={{ fontSize: 12 }}>{r.actual_to || r.intended_to || '—'}{r.redirected ? ' (redirected)' : ''}</td>
+                        <td><Badge status={r.status === 'sent' ? 'Completed' : r.status === 'dry_run' ? 'Pending' : r.status} /></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       <div className="card">
         <div className="card-title">Sent Emails ({emailLog.length})</div>
         <div className="tbl-wrap">
