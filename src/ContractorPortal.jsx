@@ -248,12 +248,12 @@ function AssignmentDetail({ assignment, contractor, onBack }) {
     const remaining = reportFiles.filter(x => x.path !== f.path)
     const patch = { report_files: remaining, report_url: remaining.length ? remaining[remaining.length - 1].path : null }
     // If the last file is removed, the report is no longer submitted
-    if (remaining.length === 0) { patch.status = 'Draft Report'; patch.submitted_at = null }
+    if (remaining.length === 0) { patch.status = 'Testing Completed'; patch.submitted_at = null }
     const { error } = await supabase.from('Assignments').update(patch).eq('id', a.id)
     if (error) { setMsg({ kind: 'danger', text: error.message }); setBusy(false); return }
     setReportFiles(remaining)
     setReportUrl(patch.report_url || '')
-    if (remaining.length === 0) setStatus('Draft Report')
+    if (remaining.length === 0) setStatus('Testing Completed')
     setMsg({ kind: 'success', text: remaining.length ? 'File removed.' : 'File removed — this report is no longer marked Submitted.' })
     setBusy(false)
   }
@@ -366,8 +366,8 @@ function AssignmentDetail({ assignment, contractor, onBack }) {
             <div className="form-group">
               <label>Current Status</label>
               <select value={status} onChange={e => setStatus(e.target.value)}>
-                {STATUSES.map(s => <option key={s} value={s}>{showStatus(s)}</option>)}
-                {!STATUSES.some(s => s.toLowerCase() === (status || '').toLowerCase()) && <option value={status}>{status}</option>}
+                {STATUSES.filter(s => s.toLowerCase() !== 'draft report').map(s => <option key={s} value={s}>{showStatus(s)}</option>)}
+                {!STATUSES.some(s => s.toLowerCase() === (status || '').toLowerCase() && s.toLowerCase() !== 'draft report') && <option value={status}>{showStatus(status)}</option>}
               </select>
             </div>
             <div className="form-group">
@@ -530,7 +530,7 @@ function Help() {
     ['How do I set my testing date?', 'Open the case from My Assignments, fill in the Testing Date field, and click Save.'],
     ['When will I get paid?', 'Payroll runs on the last business day of each month for all evaluations submitted that month, after district invoices are collected.'],
     ['What file format should I upload?', 'Please upload your report as a DOCX (Word) file. PDF is accepted, but DOCX allows the admin team to apply letterhead and make corrections before delivery to the district.'],
-    ['I finished testing — what now?', 'Update the status to "Testing Completed", then to "Draft Report" while writing. When your report is final, upload it — that automatically marks the assignment Submitted.'],
+    ['I finished testing — what now?', 'Update the status to "Testing Completed" while you write the report. When your report is final, upload it — that automatically marks the assignment Submitted.'],
   ]
   return (
     <div className="card" style={{ maxWidth: 560 }}>
