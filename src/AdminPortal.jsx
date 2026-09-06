@@ -1662,6 +1662,7 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
             <Meta k="District" v={c.School_district} />
             <Meta k="County" v={c.County} />
             <Meta k="Report Due" v={fmtDate(c.Report_Due_date)} style={dueColor(c.Report_Due_date)} />
+            {c.sent_to_district_at && <Meta k="Date Sent to District" v={fmtDate(c.sent_to_district_at)} style={{ color: 'var(--green)' }} />}
             <Meta k="Language" v={c.Language} />
             <Meta k="Grade" v={c['grade level']} />
             <Meta k="DOB" v={c.student_dob ? fmtDate(c.student_dob) : null} />
