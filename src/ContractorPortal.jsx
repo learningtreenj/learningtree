@@ -87,7 +87,7 @@ function AssignmentList({ assignments, loading, dueSoonCount, onOpen }) {
     if (chip === 'soon') { const n = daysLeft(a.report_due_date); if (s === 'submitted' || n === null || n > 7) return false }
     if (chip === 'done' && s !== 'submitted') return false
     if (chip === 'open' && s === 'submitted') return false
-    const hay = `${a.Cases?.case_number || ''} ${a.eval_type || ''} ${a.Cases?.Language || ''} ${a.Cases?.School_district || ''}`.toLowerCase()
+    const hay = `${a.Cases?.case_number || ''} ${a.Cases?.Student_name || ''} ${a.eval_type || ''} ${a.Cases?.Language || ''} ${a.Cases?.School_district || ''}`.toLowerCase()
     return hay.includes(q.toLowerCase())
   })
 
@@ -114,13 +114,14 @@ function AssignmentList({ assignments, loading, dueSoonCount, onOpen }) {
         </div>
         <div className="tbl-wrap">
           <table>
-            <thead><tr><th>Case</th><th>Eval Type</th><th>Language</th><th>District</th><th>Due Date</th><th>Testing Date</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th>Case</th><th>Student</th><th>Eval Type</th><th>Language</th><th>District</th><th>Due Date</th><th>Testing Date</th><th>Status</th><th></th></tr></thead>
             <tbody>
-              {loading && <tr><td colSpan={8} style={{ color: '#888' }}>Loading…</td></tr>}
-              {!loading && rows.length === 0 && <tr><td colSpan={8} style={{ color: '#888' }}>No assignments found.</td></tr>}
+              {loading && <tr><td colSpan={9} style={{ color: '#888' }}>Loading…</td></tr>}
+              {!loading && rows.length === 0 && <tr><td colSpan={9} style={{ color: '#888' }}>No assignments found.</td></tr>}
               {rows.map(a => (
                 <tr key={a.id}>
                   <td><span className="tbl-link" onClick={() => onOpen(a)}>{a.Cases?.case_number || a.case_id}</span></td>
+                  <td>{a.Cases?.Student_name || '—'}</td>
                   <td>{a.eval_type || '—'}</td>
                   <td>{a.Cases?.Language || '—'}</td>
                   <td>{a.Cases?.School_district || '—'}</td>
