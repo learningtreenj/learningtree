@@ -280,7 +280,7 @@ export default function AdminPortal({ user }) {
       {screen === 'cases' && <CaseList cases={cases} assignments={assignments} contractors={contractors} earnings={earnings} batches={batches} loading={loading}
         onOpen={c => { setSelectedCase(c); setScreen('casedetail') }} onChanged={load} />}
       {screen === 'casedetail' && selectedCase && <CaseDetail caseRow={selectedCase} assignments={assignments.filter(a => a.case_id === selectedCase.id)}
-        allAssignments={assignments} contractors={contractors} onBack={() => setScreen('cases')} onChanged={load} />}
+        allAssignments={assignments} contractors={contractors} qaByAssignment={qaByAssignment} earnings={earnings} onBack={() => setScreen('cases')} onChanged={load} />}
       {screen === 'contractors' && <ContractorList contractors={contractors} assignments={assignments} onChanged={load}
         languageFilter={contractorLang} onClearLanguageFilter={() => setContractorLang(null)} />}
       {screen === 'qa' && <QaQueue assignments={assignments} qaByAssignment={qaByAssignment} earnings={earnings} onChanged={load} />}
@@ -1395,7 +1395,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
   )
 }
 
-function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack, onChanged }) {
+function CaseDetail({ caseRow, assignments, allAssignments, contractors, qaByAssignment, earnings = [], onBack, onChanged }) {
   // Local mirror of the case so edits show immediately (the parent's selectedCase
   // isn't refreshed by load()). Resyncs whenever a different case is opened.
   const [c, setC] = useState(caseRow)
@@ -1516,6 +1516,42 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
     setEditTestingId(null)
     setMsg({ kind: 'success', text: `Testing date updated for ${a.Contractors?.name || a.eval_type || 'assignment'}.` })
     onChanged(); setBusy(false)
+  }
+
+  // Approve a submitted report straight from Case Detail. Mirrors QaQueue.saveReview('approved')
+  // so it shows Approved in Report Review too: writes qa_reviews, creates the earning, and
+  // completes the case + records the invoice once every report on the case is approved.
+  const qaStatusOf = a => qaByAssignment?.get?.(a.id)?.qa_status
+  async function approveReport(a) {
+    setBusy(true); setMsg(null)
+    const { error } = await supabase.from('qa_reviews').upsert({
+      assignment_id: a.id,
+      ...Object.fromEntries(QA_CHECKS.map(([k]) => [k, true])),
+      qa_status: 'approved',
+      updated_at: new Date().toISOString(),
+    })
+    if (error) { setMsg({ kind: 'danger', text: error.message }); setBusy(false); return }
+
+    // Create the contractor earning if it doesn't exist yet.
+    if (!earnings.some(e => e.assignment_id === a.id) && a.contractor_id != null) {
+      const amount = parseRate(a.Contractors?.current_rate)
+      await supabase.from('contractor_earnings').insert({
+        contractor_id: a.contractor_id, assignment_id: a.id, amount,
+        billable_date: (a.submitted_at || new Date().toISOString()).slice(0, 10), status: 'pending',
+      })
+    }
+    // If every submitted report on this case is now approved, complete it + record the invoice.
+    const siblings = assignments.filter(x => x.case_id === c.id && x.contractor_id != null && x.submitted_at)
+    const allApproved = siblings.every(x => x.id === a.id || qaStatusOf(x) === 'approved')
+    let note = ''
+    if (allApproved && siblings.length) {
+      await supabase.from('Cases').update({ Status: 'Completed' }).eq('id', c.id)
+      const res = await autoRecordInvoice({ id: c.id, ...(c || {}) }, siblings.length)
+      if (res.created) note = ` Invoice ${res.invoice_number} ($${Number(res.amount).toLocaleString()}) recorded as Draft.`
+      else if (res.skipped === 'already recorded') note = ` Invoice ${res.invoice_number} was already on file.`
+    }
+    setMsg({ kind: 'success', text: `Report approved for ${a.Contractors?.name || a.eval_type || 'this evaluation'} — now shows Approved in Report Review.${note}` })
+    onChanged && onChanged(); setBusy(false)
   }
 
   async function deleteCase() {
@@ -1765,9 +1801,9 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
             <div className="card-title">Assignments on this Case</div>
             <div className="tbl-wrap">
               <table>
-                <thead><tr><th>Contractor</th><th>Eval Type</th><th>Accepted?</th><th>Due</th><th>Testing</th><th>Status</th><th>Report</th><th></th></tr></thead>
+                <thead><tr><th>Contractor</th><th>Eval Type</th><th>Accepted?</th><th>Due</th><th>Testing</th><th>Status</th><th>Report</th><th>Approve</th><th></th></tr></thead>
                 <tbody>
-                  {assignments.length === 0 && <tr><td colSpan={8} style={{ color: '#888' }}>No contractors assigned yet.</td></tr>}
+                  {assignments.length === 0 && <tr><td colSpan={9} style={{ color: '#888' }}>No contractors assigned yet.</td></tr>}
                   {assignments.map(a => (
                     <Fragment key={a.id}>
                       <tr>
@@ -1797,13 +1833,20 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
                           ))
                         })()}</td>
                         <td style={{ whiteSpace: 'nowrap' }}>
+                          {qaStatusOf(a) === 'approved'
+                            ? <span className="badge-s s-completed">✓ Approved</span>
+                            : a.submitted_at
+                              ? <button className="btn btn-primary btn-sm" disabled={busy} title="Approve this report — marks it Approved in Report Review too" onClick={() => approveReport(a)}>✓ Approve</button>
+                              : <span style={{ color: 'var(--muted)', fontSize: 12 }}>—</span>}
+                        </td>
+                        <td style={{ whiteSpace: 'nowrap' }}>
                           <button className="btn btn-ghost btn-sm" title="Reassign to a different contractor" disabled={busy} onClick={() => startReassign(a)}>✏️</button>{' '}
                           <button className="btn btn-danger-outline btn-sm" title="Remove this assignment" disabled={busy} onClick={() => { setConfirmRemoveId(a.id); setEditAsgId(null); setMsg(null) }}>🗑</button>
                         </td>
                       </tr>
                       {editAsgId === a.id && (
                         <tr>
-                          <td colSpan={8} style={{ background: 'var(--accent-light)' }}>
+                          <td colSpan={9} style={{ background: 'var(--accent-light)' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                               <strong style={{ fontSize: 13 }}>Reassign {a.eval_type || 'evaluation'} to:</strong>
                               <select value={reassignTo} onChange={e => setReassignTo(e.target.value)} style={{ padding: '6px 10px', minWidth: 240 }}>
@@ -1823,7 +1866,7 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, onBack,
                       )}
                       {confirmRemoveId === a.id && (
                         <tr>
-                          <td colSpan={8} style={{ background: 'var(--red-bg)' }}>
+                          <td colSpan={9} style={{ background: 'var(--red-bg)' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                               <span style={{ fontSize: 13, color: 'var(--red)' }}>Remove <strong>{a.eval_type || 'this evaluation'}</strong>{a.Contractors?.name ? ` — ${a.Contractors.name}` : ''} from this case? This deletes just this assignment (and its review/earning), not the case.</span>
                               <button className="btn btn-danger btn-sm" disabled={busy} onClick={() => removeAssignment(a)}>Yes, remove</button>
