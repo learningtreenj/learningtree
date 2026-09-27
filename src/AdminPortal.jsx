@@ -224,7 +224,7 @@ export default function AdminPortal({ user }) {
     setLoading(true)
     const [c, a, k, i, q, e, b, m] = await Promise.all([
       fetchAll(() => supabase.from('Cases').select('*').order('id', { ascending: false })),
-      fetchAll(() => supabase.from('Assignments').select('*, Contractors(identifier, name, current_rate, email), Cases(id, case_number, Student_name, School_district, Language, County, district_paid, district_payment_date, invoice_seq)').order('report_due_date', { ascending: true, nullsFirst: false }).order('id')),
+      fetchAll(() => supabase.from('Assignments').select('*, Contractors(identifier, name, current_rate, email), Cases(id, case_number, Student_name, School_district, Language, County, district_paid, district_payment_date, invoice_seq, Report_Due_date)').order('report_due_date', { ascending: true, nullsFirst: false }).order('id')),
       fetchAll(() => supabase.from('Contractors').select('*').order('name').order('identifier')),
       fetchAll(() => supabase.from('Invoices').select('*').order('id', { ascending: false })),
       fetchAll(() => supabase.from('qa_reviews').select('*').order('assignment_id')),
@@ -2939,9 +2939,9 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
           <div className="card-title">Submitted Reports ({rows.length})</div>
           <div className="tbl-wrap">
             <table>
-              <thead><tr><th>Case</th><th>Student</th><th>District</th><th>Evaluation</th><th>Submitted</th><th>QA Status</th></tr></thead>
+              <thead><tr><th>Case</th><th>Student</th><th>District</th><th>Evaluation</th><th>Submitted</th><th>Due Date</th><th>QA Status</th></tr></thead>
               <tbody>
-                {rows.length === 0 && <tr><td colSpan={6} style={{ color: '#888' }}>Nothing awaiting review.</td></tr>}
+                {rows.length === 0 && <tr><td colSpan={7} style={{ color: '#888' }}>Nothing awaiting review.</td></tr>}
                 {caseGroups.map(g => {
                   if (g.items.length === 1) {
                     const a = g.items[0]
@@ -2952,6 +2952,7 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
                         <td>{a.Cases?.School_district || '—'}</td>
                         <td>{a.eval_type || '—'} — {a.Contractors?.name || '—'}</td>
                         <td>{fmtDate((a.submitted_at || '').slice(0, 10))}</td>
+                        <td style={dueColor(a.report_due_date || a.Cases?.Report_Due_date)}>{fmtDate(a.report_due_date || a.Cases?.Report_Due_date) || '—'}</td>
                         <td>{qaBadge(a)}</td>
                       </tr>
                     )
@@ -2966,6 +2967,7 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
                         <td>{g.caseRow?.School_district || '—'}</td>
                         <td><span style={{ display: 'inline-block', width: 12 }}>{isOpen(g.case_id) ? '▾' : '▸'}</span>{g.items.length} evaluations</td>
                         <td>—</td>
+                        <td style={dueColor(g.caseRow?.Report_Due_date)}>{fmtDate(g.caseRow?.Report_Due_date) || '—'}</td>
                         <td style={{ whiteSpace: 'nowrap' }}>
                           <span className={`badge-s ${approved === g.items.length ? 's-completed' : 's-pending'}`}>{approved}/{g.items.length} approved</span>
                           {allApproved && <>{' '}<button className="btn btn-ghost btn-sm" title="Download all reports for this student as one zip" disabled={busy} onClick={e => { e.stopPropagation(); consolidateReports(g.case_id, g.caseRow) }}>📦</button></>}
@@ -2978,6 +2980,7 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
                           <td></td>
                           <td style={{ paddingLeft: 24 }}>↳ {a.eval_type || '—'} — {a.Contractors?.name || '—'}</td>
                           <td>{fmtDate((a.submitted_at || '').slice(0, 10))}</td>
+                          <td style={dueColor(a.report_due_date || a.Cases?.Report_Due_date)}>{fmtDate(a.report_due_date || a.Cases?.Report_Due_date) || '—'}</td>
                           <td>{qaBadge(a)}</td>
                         </tr>
                       ))}
