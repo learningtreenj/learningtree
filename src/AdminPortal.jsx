@@ -590,14 +590,11 @@ function NewReferral({ onCreated }) {
     if (!f.Student_name || !f.School_district || !f.Report_Due_date) {
       setMsg({ kind: 'warn', text: 'Student name, district, and report due date are required.' }); return
     }
-    // Auto-numbering is paused — a case number must be entered manually for now.
-    if (!(f.case_number || '').trim()) {
-      setMsg({ kind: 'warn', text: 'Case # is required (auto-numbering is paused). Enter it manually, e.g. 26-0389.' }); return
-    }
     setBusy(true); setMsg(null)
     const phoneDigits = f.parents_phone.replace(/\D/g, '')
     const row = {
-      case_number: f.case_number.trim(),
+      // Blank → the database trigger auto-generates the next YY-NNNN case number.
+      case_number: (f.case_number || '').trim() || null,
       Student_name: f.Student_name || null,
       student_dob: f.student_dob || null,
       'grade level': f.grade || null,
@@ -623,7 +620,8 @@ function NewReferral({ onCreated }) {
     const { data, error } = await supabase.from('Cases').insert(row).select().single()
     if (error) {
       const dup = /case_number/i.test(error.message) && /duplicate|unique/i.test(error.message)
-      setMsg({ kind: 'danger', text: dup ? `Case # ${f.case_number.trim()} already exists — choose a different number.` : error.message })
+      const entered = (f.case_number || '').trim()
+      setMsg({ kind: 'danger', text: dup ? `Case # ${entered || '(entered)'} already exists — choose a different number or leave it blank to auto-number.` : error.message })
       setBusy(false); return
     }
 
@@ -731,7 +729,7 @@ function NewReferral({ onCreated }) {
     <div className="card" style={{ maxWidth: 720 }}>
       <div className="card-title">📥 New Referral Intake</div>
       {msg && <div className={`alert alert-${msg.kind}`}>{msg.text}</div>}
-      <div className="alert alert-info">Enter the case number manually (auto-numbering is paused). After creating the case you can assign contractors.</div>
+      <div className="alert alert-info">Leave the case number blank to auto-assign the next number, or enter one manually to override. After creating the case you can assign contractors.</div>
 
       <label className="upload-zone"
         style={{
@@ -766,9 +764,9 @@ function NewReferral({ onCreated }) {
       <SectionHead>Case Number</SectionHead>
       <div className="form-row">
         <div className="form-group">
-          <label>Case # *</label>
-          <input value={f.case_number} onChange={e => set('case_number', e.target.value)} placeholder="e.g. 26-0389" />
-          <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>Auto-numbering is paused — enter the case number manually.</div>
+          <label>Case #</label>
+          <input value={f.case_number} onChange={e => set('case_number', e.target.value)} placeholder="Auto-assigned if left blank" />
+          <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>Leave blank to auto-number (next is 26-0450), or type one to override.</div>
         </div>
         <div className="form-group"></div>
       </div>
