@@ -224,7 +224,7 @@ export default function AdminPortal({ user }) {
     setLoading(true)
     const [c, a, k, i, q, e, b, m] = await Promise.all([
       fetchAll(() => supabase.from('Cases').select('*').order('id', { ascending: false })),
-      fetchAll(() => supabase.from('Assignments').select('*, Contractors(identifier, name, current_rate, email), Cases(id, case_number, Student_name, School_district, Language, County, district_paid, district_payment_date, invoice_seq, Report_Due_date)').order('report_due_date', { ascending: true, nullsFirst: false }).order('id')),
+      fetchAll(() => supabase.from('Assignments').select('*, Contractors(identifier, name, current_rate, email), Cases(id, case_number, Student_name, School_district, Language, County, district_paid, district_payment_date, invoice_seq, Report_Due_date, sent_to_district_at)').order('report_due_date', { ascending: true, nullsFirst: false }).order('id')),
       fetchAll(() => supabase.from('Contractors').select('*').order('name').order('identifier')),
       fetchAll(() => supabase.from('Invoices').select('*').order('id', { ascending: false })),
       fetchAll(() => supabase.from('qa_reviews').select('*').order('assignment_id')),
@@ -238,7 +238,10 @@ export default function AdminPortal({ user }) {
   }
   useEffect(() => { load() }, [])
 
-  const openAssignments = assignments.filter(x => (x.status || '').toLowerCase() !== 'submitted')
+  // Open = not submitted AND the case isn't marked complete (sent to district). A completed
+  // case never counts as overdue/due anywhere, even if its reports were never uploaded
+  // (e.g. legacy imported cases).
+  const openAssignments = assignments.filter(x => (x.status || '').toLowerCase() !== 'submitted' && !x.Cases?.sent_to_district_at)
   const dueThisWeek = openAssignments.filter(x => { const n = daysLeft(x.report_due_date); return n !== null && n <= 7 })
   const qaByAssignment = useMemo(() => new Map(qaReviews.map(q => [q.assignment_id, q])), [qaReviews])
   const awaitingQa = assignments.filter(a => a.submitted_at && qaByAssignment.get(a.id)?.qa_status !== 'approved')
@@ -1185,6 +1188,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
     if (chip === 'active' && done) return false
     if (chip === 'completed' && !done) return false
     if (chip === 'due') {
+      if (done) return false   // a completed case is never "due soon"
       const soon = asg.some(a => { const n = daysLeft(a.report_due_date); return n !== null && n <= 7 && (a.status || '').toLowerCase() !== 'submitted' })
       const caseSoon = (() => { const n = daysLeft(c.Report_Due_date); return n !== null && n <= 7 })()
       if (!soon && !caseSoon) return false
@@ -1462,15 +1466,15 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, qaByAss
     const sending = !c.sent_to_district_at
     setBusy(true); setMsg(null)
     const val = sending ? new Date().toISOString() : null
-    const { error } = await supabase.from('Cases').update({ sent_to_district_at: val }).eq('id', c.id)
+    const { error } = await supabase.from('Cases').update({ sent_to_district_at: val, Status: sending ? 'Completed' : 'In Progress' }).eq('id', c.id)
     if (error) { setMsg({ kind: 'danger', text: error.message }); setBusy(false); return }
-    setC(prev => ({ ...prev, sent_to_district_at: val }))
+    setC(prev => ({ ...prev, sent_to_district_at: val, Status: sending ? 'Completed' : 'In Progress' }))
     // Keep the Client Invoices register in step: Draft -> Sent on send, and back on reopen.
     await supabase.from('Invoices')
       .update({ status: sending ? 'Sent' : 'Draft' })
       .eq('case_id', c.id)
       .eq('status', sending ? 'Draft' : 'Sent')
-    setMsg({ kind: 'success', text: sending ? 'Marked as sent to the district — case is now Complete; its invoice is now marked Sent.' : 'Reopened — case is no longer marked Complete.' })
+    setMsg({ kind: 'success', text: sending ? 'Case marked complete — it no longer shows as due or overdue anywhere. Its invoice (if any) is marked Sent.' : 'Reopened — case is no longer marked complete.' })
     onChanged(); setBusy(false)
   }
 
@@ -1760,8 +1764,8 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, qaByAss
               {assignments.some(a => a.contractor_id != null && (a.status || '').toLowerCase() === 'submitted') &&
                 <button className="btn btn-secondary btn-sm" onClick={downloadCaseInvoice} title="Download the district invoice for this case">⬇ Invoice</button>}
               {c.sent_to_district_at
-                ? <button className="btn btn-ghost btn-sm" disabled={busy} onClick={markSent} title="Reopen — undo sent-to-district">↩ Reopen</button>
-                : <button className="btn btn-primary btn-sm" disabled={busy} onClick={markSent} title="Mark this case sent to the school district (sets status to Complete)">✅ Mark sent to district</button>}
+                ? <button className="btn btn-ghost btn-sm" disabled={busy} onClick={markSent} title="Reopen — mark this case not complete">↩ Reopen case</button>
+                : <button className="btn btn-primary btn-sm" disabled={busy} onClick={markSent} title="Mark this case fully complete — removes it from all due/overdue lists (use for finished or legacy cases even if reports weren't uploaded)">✅ Mark case complete</button>}
               <button className="btn btn-danger-outline btn-sm" onClick={() => { setConfirmDelete(true); setMsg(null) }}>🗑 Delete</button>
             </div>
           </div>
