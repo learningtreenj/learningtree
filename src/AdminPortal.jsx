@@ -1126,7 +1126,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
 
   // Non-eval columns keep the sort/filter menus. Eval types are their own fixed columns.
   const LEFT_COLS = [['case_number', 'Case #'], ['Student_name', 'Student'], ['School_district', 'District']]
-  const RIGHT_COLS = [['Report_Due_date', 'Due Date'], ['status', 'Status'], ['mail_date', 'Mail Date']]
+  const RIGHT_COLS = [['created_date', 'Date Added'], ['Report_Due_date', 'Due Date'], ['status', 'Status'], ['mail_date', 'Mail Date']]
   const CHECKBOX_COLS = { School_district: true, status: true }
   const districtOptions = useMemo(() => [...new Set(cases.map(c => (c.School_district || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [cases])
   // Case-level status is now just In Progress / Complete (Complete = all reports received).
@@ -1161,6 +1161,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
   function colSortVal(col, c) {
     const asg = byCase[c.id] || []
     switch (col) {
+      case 'created_date': return c.created_date || ''             // ISO date sorts lexically
       case 'Report_Due_date': return c.Report_Due_date || ''       // ISO date sorts lexically
       case 'assignments': return asg.length                        // numeric
       case 'status': return caseProgressText(c, asg).toLowerCase()
@@ -1175,6 +1176,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
   function colFilterVal(col, c) {
     const asg = byCase[c.id] || []
     if (col === 'assignments') return asg.map(a => `${a.eval_type || ''} ${a.Contractors?.name || ''}`).join(' ').toLowerCase()
+    if (col === 'created_date') return `${c.created_date || ''} ${fmtDate(c.created_date)}`.toLowerCase()
     if (col === 'mail_date') return `${c.mail_date || ''} ${fmtDate(c.mail_date)}`.toLowerCase()
     if (col === 'Report_Due_date') return `${c.Report_Due_date || ''} ${fmtDate(c.Report_Due_date)}`.toLowerCase()
     return String(colSortVal(col, c)).toLowerCase()
@@ -1346,6 +1348,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
                       </td>
                     )
                   })}
+                  <td style={{ whiteSpace: 'nowrap' }}>{c.created_date ? fmtDate(c.created_date) : <span style={{ color: 'var(--muted)' }}>—</span>}</td>
                   <td style={{ ...dueColor(c.Report_Due_date), whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
                     {editDueId === c.id
                       ? <input type="date" autoFocus defaultValue={c.Report_Due_date ? String(c.Report_Due_date).slice(0, 10) : ''}
