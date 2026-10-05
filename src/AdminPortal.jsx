@@ -2059,6 +2059,16 @@ function ContractorList({ contractors, assignments, onChanged, languageFilter = 
     setBusy(false)
   }
 
+  // Inline edit of how a contractor prefers to be paid (also shown on the Payroll page).
+  async function setPaymentMethod(k, method) {
+    setBusy(true); setMsg(null)
+    const { error } = await supabase.from('Contractors').update({ preferred_payment_method: method || null }).eq('identifier', k.identifier)
+    if (error) setMsg({ kind: 'danger', text: error.message })
+    else setMsg({ kind: 'success', text: `${k.name}: payment method ${method ? `set to ${method}` : 'cleared'}.` })
+    onChanged()
+    setBusy(false)
+  }
+
   function startEdit(k) {
     const uniq = arr => [...new Set(arr)]
     const fields = uniq((k.field || '').split(',').map(t => t.trim()).filter(Boolean))
@@ -2194,7 +2204,7 @@ function ContractorList({ contractors, assignments, onChanged, languageFilter = 
       {msg && <div className={`alert alert-${msg.kind}`}>{msg.text}</div>}
       <div className="tbl-wrap">
         <table>
-          <thead><tr><th>Name</th><th>Field</th><th>Languages</th><th>County</th><th>Rate</th><th>Open Cases</th><th>Active</th><th>Portal Login</th><th></th></tr></thead>
+          <thead><tr><th>Name</th><th>Field</th><th>Languages</th><th>County</th><th>Rate</th><th>Payment Method</th><th>Open Cases</th><th>Active</th><th>Portal Login</th><th></th></tr></thead>
           <tbody>
             {rows.map(k => {
               const isActive = k.active !== false
@@ -2205,6 +2215,15 @@ function ContractorList({ contractors, assignments, onChanged, languageFilter = 
                 <td>{[k.language, k.language_2].filter(Boolean).join(', ') || '—'}</td>
                 <td>{k.county || '—'}</td>
                 <td>{k.current_rate || '—'}</td>
+                <td>
+                  <select value={k.preferred_payment_method || ''} disabled={busy} onChange={e => setPaymentMethod(k, e.target.value)}
+                    title="Preferred payment method — click to change"
+                    style={{ padding: '2px 4px', fontSize: 12, border: '1px solid var(--border)', borderRadius: 5, background: '#fff', color: k.preferred_payment_method ? undefined : '#9aa1ab' }}>
+                    <option value="">— set</option>
+                    {PAYMENT_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
+                    {k.preferred_payment_method && !PAYMENT_METHODS.includes(k.preferred_payment_method) && <option value={k.preferred_payment_method}>{k.preferred_payment_method}</option>}
+                  </select>
+                </td>
                 <td>{openBy[k.identifier] || 0}</td>
                 <td style={{ whiteSpace: 'nowrap' }}>
                   <button type="button" disabled={busy} onClick={() => toggleActive(k, true)} title="Mark active — available for assignments" style={paidBtnStyle(true, isActive)}>Active</button>
