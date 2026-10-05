@@ -11,17 +11,21 @@ export default function ContractorPortal({ contractor }) {
   const [earnings, setEarnings] = useState([])
   const [selected, setSelected] = useState(null)
   const [loading, setLoading] = useState(true)
+  const [notifications, setNotifications] = useState([])
 
   async function load() {
     setLoading(true)
-    const [a, e] = await Promise.all([
+    const [a, e, n] = await Promise.all([
       supabase.from('Assignments').select('*, Cases(*)')
         .order('report_due_date', { ascending: true, nullsFirst: false }),
       supabase.from('contractor_earnings').select('*, payment_batches(batch_month, status)')
         .order('billable_date', { ascending: false }),
+      supabase.from('contractor_notifications').select('*').eq('contractor_id', contractor.identifier)
+        .order('created_at', { ascending: false }),
     ])
     if (!a.error) setAssignments(a.data || [])
     if (!e.error) setEarnings(e.data || [])
+    if (!n.error) setNotifications(n.data || [])
     setLoading(false)
   }
   useEffect(() => { load() }, [])
@@ -29,9 +33,20 @@ export default function ContractorPortal({ contractor }) {
   const open = assignments.filter(a => (a.status || '').toLowerCase() !== 'submitted')
   const dueSoon = open.filter(a => { const n = daysLeft(a.report_due_date); return n !== null && n <= 7 })
 
+  const unread = notifications.filter(n => !n.read_at)
+  // Opening the Notifications page marks everything read (the red badge clears).
+  async function markNotificationsRead() {
+    const ids = unread.map(n => n.id)
+    if (!ids.length) return
+    const stamp = new Date().toISOString()
+    setNotifications(prev => prev.map(n => n.read_at ? n : { ...n, read_at: stamp }))
+    await supabase.from('contractor_notifications').update({ read_at: stamp }).in('id', ids)
+  }
+
   const nav = [
     { label: 'My Work', items: [
       { id: 'assignments', icon: '📋', label: 'My Assignments', badge: open.length || null },
+      { id: 'notifications', icon: '🔔', label: 'Notifications', badge: unread.length || null },
     ]},
     { label: 'Account', items: [
       { id: 'profile', icon: '👤', label: 'My Profile' },
@@ -40,7 +55,7 @@ export default function ContractorPortal({ contractor }) {
     ]},
   ]
 
-  const titles = { assignments: 'My Assignments', detail: 'Assignment Detail', profile: 'My Profile', payouts: 'My Earnings', help: 'Help & Support' }
+  const titles = { assignments: 'My Assignments', notifications: 'Notifications', detail: 'Assignment Detail', profile: 'My Profile', payouts: 'My Earnings', help: 'Help & Support' }
 
   return (
     <Shell brand="BEval Portal" sub="Contractor View"
@@ -50,10 +65,17 @@ export default function ContractorPortal({ contractor }) {
       onLogout={() => supabase.auth.signOut()}
       title={titles[screen]}>
 
+      {screen === 'assignments' && unread.length > 0 && (
+        <div className="alert alert-success" style={{ alignItems: 'center' }}>
+          🔔 <span style={{ flex: 1 }}>You have <strong>{unread.length} new notification{unread.length === 1 ? '' : 's'}</strong> from the office.</span>
+          <button className="btn btn-secondary btn-sm" onClick={() => setScreen('notifications')}>View</button>
+        </div>
+      )}
       {screen === 'assignments' && (
         <AssignmentList assignments={assignments} loading={loading} dueSoonCount={dueSoon.length}
           onOpen={a => { setSelected(a); setScreen('detail') }} />
       )}
+      {screen === 'notifications' && <Notifications items={notifications} onSeen={markNotificationsRead} />}
       {screen === 'detail' && selected && (
         <AssignmentDetail assignment={selected} contractor={contractor}
           onBack={() => { setScreen('assignments'); load() }}
@@ -63,6 +85,49 @@ export default function ContractorPortal({ contractor }) {
       {screen === 'payouts' && <Earnings earnings={earnings} assignments={assignments} contractor={contractor} />}
       {screen === 'help' && <Help />}
     </Shell>
+  )
+}
+
+// Notices from the office (e.g. "Payment sent"). Anything unread when the page opens is
+// flagged "New" for this visit and then marked read.
+function Notifications({ items, onSeen }) {
+  const [newIds] = useState(() => new Set(items.filter(n => !n.read_at).map(n => n.id)))
+  useEffect(() => { onSeen() }, [])
+  const money = v => `$${Number(v || 0).toLocaleString()}`
+  return (
+    <>
+      {items.length === 0 && <div className="card" style={{ color: '#888' }}>No notifications yet. Payment notices from the office will appear here.</div>}
+      {items.map(n => {
+        const lines = Array.isArray(n.details?.lines) ? n.details.lines : []
+        return (
+          <div key={n.id} className="card" style={{ marginBottom: 12, border: newIds.has(n.id) ? '2px solid var(--green)' : undefined }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
+              <div className="card-title" style={{ marginBottom: 4 }}>
+                {n.kind === 'payment' ? '💵 ' : '🔔 '}{n.title}
+                {newIds.has(n.id) && <span className="badge-s s-completed" style={{ marginLeft: 8 }}>New</span>}
+              </div>
+              <span style={{ fontSize: 12, color: '#888' }}>{new Date(n.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+            </div>
+            {n.body && <div style={{ fontSize: 13, color: '#444', marginBottom: lines.length ? 10 : 0 }}>{n.body}</div>}
+            {lines.length > 0 && (
+              <div className="tbl-wrap">
+                <table>
+                  <thead><tr><th>Case</th><th>Student</th><th>Evaluation</th><th>Amount</th><th>Date Paid</th></tr></thead>
+                  <tbody>
+                    {lines.map((l, i) => (
+                      <tr key={i}>
+                        <td>{l.case_number || '—'}</td><td>{l.student || '—'}</td><td>{l.field || '—'}</td>
+                        <td style={{ fontWeight: 700 }}>{money(l.amount)}</td><td>{l.date_paid ? fmtDate(l.date_paid) : '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </>
   )
 }
 

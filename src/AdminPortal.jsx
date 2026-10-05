@@ -2565,7 +2565,7 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
     const asgIds = keys.filter(k => k[0] === 'e').map(k => Number(k.slice(2)))
     let err = null
     if (caseIds.length) { const { error } = await supabase.from('Cases').update({ district_payment_date: val || null }).in('id', caseIds); if (error) err = error }
-    if (asgIds.length) { const { error } = await supabase.from('Assignments').update({ paid_date: val || null }).in('id', asgIds); if (error) err = error }
+    if (asgIds.length) { const { error } = await supabase.from('Assignments').update(val ? { paid_date: val } : { paid_date: null, paid_notified_at: null }).in('id', asgIds); if (error) err = error }
     if (err) setMsg({ kind: 'danger', text: err.message })
     else setMsg({ kind: 'success', text: `Date ${val ? 'set' : 'cleared'} for ${keys.length} cell${keys.length === 1 ? '' : 's'}.` })
     onChanged(); setBusy(false)
@@ -2644,6 +2644,7 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
         evaluator: k.name || '—', field: a.eval_type || '—',
         case_number: a.Cases?.case_number || '', student: a.Cases?.Student_name || '',
         method: k.preferred_payment_method || '',
+        notified: a.paid_notified_at || null,   // when the evaluator was told this line was paid
         // Approved reports carry a recorded earning; otherwise use the evaluator's current rate.
         amount: e ? Number(e.amount || 0) : parseRate(k.current_rate),
       }
@@ -2735,12 +2736,13 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
     setBusy(true); setMsg(null)
     for (let i = 0; i < ids.length; i += 200) {
       const chunk = ids.slice(i, i + 200)
-      const { error } = await supabase.from('Assignments').update({ paid_date: date || null }).in('id', chunk)
+      const { error } = await supabase.from('Assignments').update(date ? { paid_date: date } : { paid_date: null, paid_notified_at: null }).in('id', chunk)
       if (error) { setMsg({ kind: 'danger', text: error.message }); onChanged(); setBusy(false); return }
       // Keep the contractor's "My Earnings" status in step.
       await supabase.from('contractor_earnings').update({ status: date ? 'paid' : 'pending' }).in('assignment_id', chunk)
     }
     setDateOverride(prev => { const n = { ...prev }; ids.forEach(id => { n[`e:${id}`] = date || '' }); return n })
+    if (!date) setJustNotified(prev => { const n = new Set(prev); ids.forEach(id => n.delete(id)); return n })
     setPicked(new Set())
     let note = ''
     if (date) {
@@ -2751,6 +2753,57 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
       }
     }
     setMsg({ kind: 'success', text: (date ? `Marked ${ids.length} evaluation${ids.length === 1 ? '' : 's'} paid on ${fmtDate(date)}.` : `Cleared the paid date on ${ids.length} evaluation${ids.length === 1 ? '' : 's'}.`) + note })
+    onChanged(); setBusy(false)
+  }
+
+  // ── Notify evaluators, inside their portal, about lines that have been marked paid ──
+  const [notifyOpen, setNotifyOpen] = useState(false)       // confirmation dialog
+  const [justNotified, setJustNotified] = useState(new Set()) // line ids notified this session
+  // Paid lines in this payroll month that the evaluator hasn't been told about yet, per evaluator.
+  const notifyGroups = (() => {
+    const m = new Map()
+    for (const l of monthLines) {
+      const paid = paidOf(l.id)
+      if (!paid || l.notified || justNotified.has(l.id)) continue
+      const g = m.get(l.contractor_id) || {
+        contractor_id: l.contractor_id, evaluator: l.evaluator, method: l.method,
+        hasLogin: !!contractorById.get(l.contractor_id)?.user_id, lines: [],
+      }
+      g.lines.push({ ...l, paid })
+      m.set(l.contractor_id, g)
+    }
+    return [...m.values()].sort((x, y) => x.evaluator.localeCompare(y.evaluator))
+  })()
+  const notifyLineCount = notifyGroups.reduce((n, g) => n + g.lines.length, 0)
+
+  async function sendPaidNotifications() {
+    if (!notifyGroups.length) { setNotifyOpen(false); return }
+    setBusy(true); setMsg(null)
+    const rows = notifyGroups.map(g => {
+      const total = sumOf(g.lines)
+      const dates = [...new Set(g.lines.map(l => l.paid))]
+      return {
+        contractor_id: g.contractor_id, kind: 'payment',
+        title: `Payment sent — ${monthLabel(month)} payroll`,
+        body: `You were paid $${total.toLocaleString()} for ${g.lines.length} evaluation${g.lines.length === 1 ? '' : 's'}`
+          + (dates.length === 1 ? ` on ${fmtDate(dates[0])}` : '') + (g.method ? ` via ${g.method}` : '') + '.',
+        details: {
+          month, total,
+          lines: g.lines.map(l => ({ case_number: l.case_number, student: l.student, field: l.field, amount: l.amount, date_paid: l.paid })),
+        },
+      }
+    })
+    const { error } = await supabase.from('contractor_notifications').insert(rows)
+    if (error) { setMsg({ kind: 'danger', text: `Notifications were not sent: ${error.message}` }); setNotifyOpen(false); setBusy(false); return }
+    // Stamp the lines so the same payment is never announced twice.
+    const ids = notifyGroups.flatMap(g => g.lines.map(l => l.id))
+    const stamp = new Date().toISOString()
+    for (let i = 0; i < ids.length; i += 200) {
+      await supabase.from('Assignments').update({ paid_notified_at: stamp }).in('id', ids.slice(i, i + 200))
+    }
+    setJustNotified(prev => new Set([...prev, ...ids]))
+    setNotifyOpen(false)
+    setMsg({ kind: 'success', text: `Notified ${rows.length} evaluator${rows.length === 1 ? '' : 's'} in their portal about ${ids.length} paid evaluation${ids.length === 1 ? '' : 's'}.` })
     onChanged(); setBusy(false)
   }
 
@@ -2812,6 +2865,11 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
           {pickedVisible.some(l => paidOf(l.id)) &&
             <button className="btn btn-ghost btn-sm" disabled={busy} title="Undo — clears the paid date on the selected rows" onClick={() => setPaid(pickedVisible.filter(l => paidOf(l.id)).map(l => l.id), '')}>↩ Clear paid date</button>}
           <span style={{ flex: 1 }} />
+          <button className="btn btn-secondary btn-sm" disabled={busy || notifyLineCount === 0}
+            title={notifyLineCount === 0 ? 'No paid evaluations in this month are waiting to be announced' : 'Post a "Payment sent" notice in the portal of each evaluator who has been marked paid'}
+            onClick={() => setNotifyOpen(true)}>
+            🔔 Notify paid evaluators ({notifyGroups.length})
+          </button>
           {monthAllPaid && <button className="btn btn-secondary btn-sm" disabled={busy} onClick={archiveNow}>📦 {monthArchive ? 'Update archive' : 'Archive month'}</button>}
           <button className="btn btn-ghost btn-sm" disabled={monthLines.length === 0} onClick={() => exportPayrollToExcel(month, archiveRowsFor(month))}>⬇ Export to Excel</button>
         </div>
@@ -2974,6 +3032,32 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
           </div>
         )}
       </div>
+      {notifyOpen && (
+        <div onClick={() => { if (!busy) setNotifyOpen(false) }}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.45)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+          <div className="card" role="dialog" aria-modal="true" aria-label="Notify evaluators?" onClick={e => e.stopPropagation()}
+            style={{ maxWidth: 480, width: '100%', boxShadow: '0 12px 40px rgba(0,0,0,.3)' }}>
+            <div className="card-title" style={{ fontSize: 16 }}>🔔 Notify evaluators?</div>
+            <div style={{ fontSize: 13, color: '#444', marginBottom: 10 }}>
+              This posts a <strong>“Payment sent”</strong> notice in the portal of{' '}
+              <strong>{notifyGroups.length} evaluator{notifyGroups.length === 1 ? '' : 's'}</strong> covering{' '}
+              <strong>{notifyLineCount} paid evaluation{notifyLineCount === 1 ? '' : 's'}</strong> for {monthLabel(month)}. No email is sent.
+            </div>
+            <div style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 10px', fontSize: 13, marginBottom: 14 }}>
+              {notifyGroups.map(g => (
+                <div key={g.contractor_id} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '4px 0', borderBottom: '1px solid #f0f2f5' }}>
+                  <span>{g.evaluator}{!g.hasLogin && <span style={{ color: 'var(--muted)', fontSize: 11 }}> · no portal login yet</span>}</span>
+                  <span style={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{g.lines.length} · ${sumOf(g.lines).toLocaleString()}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <button className="btn btn-ghost" disabled={busy} onClick={() => setNotifyOpen(false)}>No, go back</button>
+              <button className="btn btn-primary" disabled={busy} onClick={sendPaidNotifications}>{busy ? 'Sending…' : 'Yes, send'}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }
