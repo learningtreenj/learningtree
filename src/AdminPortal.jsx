@@ -2648,7 +2648,7 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
         amount: e ? Number(e.amount || 0) : parseRate(k.current_rate),
       }
     }), [assignments, contractorById, earningByAsg])
-  const lineSort = (x, y) => x.evaluator.localeCompare(y.evaluator) || x.student.localeCompare(y.student) || x.field.localeCompare(y.field)
+  const lineSort = (x, y) => x.field.localeCompare(y.field) || x.evaluator.localeCompare(y.evaluator) || x.student.localeCompare(y.student)
   const monthLabel = ym => { const [y, m] = String(ym || '').split('-').map(Number); return (y && m) ? new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) : (ym || '—') }
 
   const [archives, setArchives] = useState([])
@@ -2683,6 +2683,17 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
   const visibleLines = monthLines.filter(l =>
     (!payEval || l.evaluator === payEval) && (!payField || l.field === payField) &&
     (payStatus === 'all' || (payStatus === 'paid') === !!paidOf(l.id)))
+  // Click-to-sort on Evaluator / Field / Student Name. Default: grouped by field, A→Z.
+  const [paySort, setPaySort] = useState({ col: 'field', dir: 'asc' })
+  const sortBy = col => setPaySort(p => p.col === col ? { col, dir: p.dir === 'asc' ? 'desc' : 'asc' } : { col, dir: 'asc' })
+  const sortedLines = [...visibleLines].sort((x, y) =>
+    (String(x[paySort.col] || '').localeCompare(String(y[paySort.col] || '')) * (paySort.dir === 'asc' ? 1 : -1)) || lineSort(x, y))
+  const sortTh = (col, label) => (
+    <th onClick={() => sortBy(col)} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}
+      title={`Sort by ${label.toLowerCase()} — click again to reverse`}>
+      {label} <span style={{ color: paySort.col === col ? 'var(--accent)' : '#b6bcc5' }}>{paySort.col === col ? (paySort.dir === 'asc' ? '▲' : '▼') : '↕'}</span>
+    </th>
+  )
   const evalOptions = [...new Set(monthLines.map(l => l.evaluator))].sort((x, y) => x.localeCompare(y))
   const fieldOptions = [...new Set(monthLines.map(l => l.field))].sort((x, y) => x.localeCompare(y))
   const sumOf = arr => arr.reduce((n, l) => n + Number(l.amount || 0), 0)
@@ -2809,15 +2820,29 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
           <table>
             <thead><tr>
               <th style={{ width: 30 }}><input type="checkbox" checked={allUnpaidPicked} onChange={toggleAll} disabled={visibleUnpaid.length === 0} title="Select all unpaid shown" /></th>
-              <th>Evaluator</th><th>Field</th><th>Case #</th><th>Student Name</th><th>Payment Method</th>
+              {sortTh('evaluator', 'Evaluator')}{sortTh('field', 'Field')}<th>Case #</th>{sortTh('student', 'Student Name')}<th>Payment Method</th>
               <th style={{ textAlign: 'right' }}>Earnings</th><th>Report Rec'd</th><th>Date Paid</th>
             </tr></thead>
             <tbody>
               {visibleLines.length === 0 && <tr><td colSpan={9} style={{ color: '#888' }}>{monthLines.length === 0 ? 'No reports received in this payroll period yet.' : 'No evaluations match these filters.'}</td></tr>}
-              {visibleLines.map(l => {
+              {sortedLines.map((l, i) => {
                 const paid = paidOf(l.id)
+                // When sorted by field, start each field with a group header + subtotal.
+                const newGroup = paySort.col === 'field' && (i === 0 || sortedLines[i - 1].field !== l.field)
+                const groupLines = newGroup ? sortedLines.filter(x => x.field === l.field) : null
                 return (
-                  <tr key={l.id} style={{ background: picked.has(l.id) ? 'var(--accent-light)' : undefined }}>
+                  <Fragment key={l.id}>
+                  {newGroup && (
+                    <tr style={{ background: '#e8eef6' }}>
+                      <td></td>
+                      <td colSpan={5} style={{ fontWeight: 700, fontSize: 12, textTransform: 'uppercase', letterSpacing: '.04em', color: '#3b4a5e' }}>
+                        {l.field} <span style={{ fontWeight: 400, textTransform: 'none', letterSpacing: 0, color: 'var(--muted)' }}>· {groupLines.length} evaluation{groupLines.length === 1 ? '' : 's'}</span>
+                      </td>
+                      <td style={{ textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>${sumOf(groupLines).toLocaleString()}</td>
+                      <td></td><td></td>
+                    </tr>
+                  )}
+                  <tr style={{ background: picked.has(l.id) ? 'var(--accent-light)' : undefined }}>
                     <td><input type="checkbox" checked={picked.has(l.id)} onChange={() => togglePick(l.id)} /></td>
                     <td style={{ fontWeight: 600 }}>{l.evaluator}</td>
                     <td>{l.field}</td>
@@ -2836,6 +2861,7 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
                     <td style={{ whiteSpace: 'nowrap' }}>{fmtDate(l.received)}</td>
                     <td style={{ whiteSpace: 'nowrap' }}>{paid ? <span className="badge-s s-completed">Paid {fmtDate(paid)}</span> : <span className="badge-s s-pending">Unpaid</span>}</td>
                   </tr>
+                  </Fragment>
                 )
               })}
               {visibleLines.length > 0 && (
