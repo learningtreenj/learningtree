@@ -2673,7 +2673,6 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
   const [payMonth, setPayMonth] = useState(null)
   const [payEval, setPayEval] = useState('')
   const [payField, setPayField] = useState('')
-  const [payStudent, setPayStudent] = useState('')   // student-name contains…
   const [payStatus, setPayStatus] = useState('all') // all | unpaid | paid
   const [picked, setPicked] = useState(new Set())    // selected assignment ids
   const [payDate, setPayDate] = useState(todayISO())
@@ -2683,7 +2682,6 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
   const monthLines = useMemo(() => payLines.filter(l => l.month === month).sort(lineSort), [payLines, month])
   const visibleLines = monthLines.filter(l =>
     (!payEval || l.evaluator === payEval) && (!payField || l.field === payField) &&
-    (!payStudent.trim() || l.student.toLowerCase().includes(payStudent.trim().toLowerCase())) &&
     (payStatus === 'all' || (payStatus === 'paid') === !!paidOf(l.id)))
   const evalOptions = [...new Set(monthLines.map(l => l.evaluator))].sort((x, y) => x.localeCompare(y))
   const fieldOptions = [...new Set(monthLines.map(l => l.field))].sort((x, y) => x.localeCompare(y))
@@ -2694,11 +2692,7 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
   const pickedVisible = visibleLines.filter(l => picked.has(l.id))
   const visibleUnpaid = visibleLines.filter(l => !paidOf(l.id))
   const allUnpaidPicked = visibleUnpaid.length > 0 && visibleUnpaid.every(l => picked.has(l.id))
-  const clearPayFilters = () => { setPayEval(''); setPayField(''); setPayStudent('') }
-  const payFiltered = !!(payEval || payField || payStudent.trim())
-  const pickMonth = m => { setPayMonth(m); setPicked(new Set()); clearPayFilters() }
-  // Filter control that sits inside a column header, under its label.
-  const thFilter = { display: 'block', marginTop: 4, width: '100%', minWidth: 120, padding: '3px 5px', fontSize: 12, fontWeight: 400, textTransform: 'none', letterSpacing: 0, color: '#333', border: '1px solid var(--border)', borderRadius: 5, background: '#fff' }
+  const pickMonth = m => { setPayMonth(m); setPicked(new Set()); setPayEval(''); setPayField('') }
   const togglePick = id => setPicked(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
   const toggleAll = () => setPicked(allUnpaidPicked ? new Set() : new Set(visibleUnpaid.map(l => l.id)))
 
@@ -2771,10 +2765,17 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
                 </option>
               ))}
             </select>
+            <select value={payEval} onChange={e => setPayEval(e.target.value)}>
+              <option value="">All evaluators</option>
+              {evalOptions.map(n => <option key={n} value={n}>{n}</option>)}
+            </select>
+            <select value={payField} onChange={e => setPayField(e.target.value)}>
+              <option value="">All fields</option>
+              {fieldOptions.map(n => <option key={n} value={n}>{n}</option>)}
+            </select>
             {[['all', 'All'], ['unpaid', 'Unpaid'], ['paid', 'Paid']].map(([id, label]) => (
               <span key={id} className={`filter-chip ${payStatus === id ? 'active' : ''}`} onClick={() => setPayStatus(id)}>{label}</span>
             ))}
-            {payFiltered && <span className="tbl-link" style={{ fontSize: 12 }} onClick={clearPayFilters}>✕ Clear column filters</span>}
           </div>
         </div>
         <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap', fontSize: 13, marginBottom: 10 }}>
@@ -2806,25 +2807,9 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
         {monthAllPaid && !monthArchive && <div className="alert alert-success">Every evaluation for {monthLabel(month)} is paid. Click <strong>Archive month</strong> to file it below.</div>}
         <div className="tbl-wrap sticky-head">
           <table>
-            <thead><tr style={{ verticalAlign: 'top' }}>
+            <thead><tr>
               <th style={{ width: 30 }}><input type="checkbox" checked={allUnpaidPicked} onChange={toggleAll} disabled={visibleUnpaid.length === 0} title="Select all unpaid shown" /></th>
-              <th>Evaluator
-                <select value={payEval} onChange={e => setPayEval(e.target.value)} style={thFilter} title="Filter by evaluator">
-                  <option value="">All</option>
-                  {evalOptions.map(n => <option key={n} value={n}>{n}</option>)}
-                </select>
-              </th>
-              <th>Field
-                <select value={payField} onChange={e => setPayField(e.target.value)} style={{ ...thFilter, minWidth: 90 }} title="Filter by evaluation field">
-                  <option value="">All</option>
-                  {fieldOptions.map(n => <option key={n} value={n}>{n}</option>)}
-                </select>
-              </th>
-              <th>Case #</th>
-              <th>Student Name
-                <input type="text" value={payStudent} onChange={e => setPayStudent(e.target.value)} placeholder="Filter…" style={thFilter} title="Filter by student name" />
-              </th>
-              <th>Payment Method</th>
+              <th>Evaluator</th><th>Field</th><th>Case #</th><th>Student Name</th><th>Payment Method</th>
               <th style={{ textAlign: 'right' }}>Earnings</th><th>Report Rec'd</th><th>Date Paid</th>
             </tr></thead>
             <tbody>
