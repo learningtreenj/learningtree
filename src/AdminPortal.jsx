@@ -203,6 +203,24 @@ function receivedISO(ts) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
+// Payroll cutoff: reports received through the 25th are paid in that month's payroll;
+// anything received on the 26th or later rolls into the next month's payroll.
+const PAYROLL_CUTOFF_DAY = 25
+function payrollMonthOf(isoDate) {
+  const [y, m, d] = String(isoDate || '').slice(0, 10).split('-').map(Number)
+  if (!y || !m) return ''
+  const dt = d > PAYROLL_CUTOFF_DAY ? new Date(y, m, 1) : new Date(y, m - 1, 1)
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`
+}
+// The receiving window behind a payroll month ('YYYY-MM'), e.g. "Sep 26 – Oct 25, 2026".
+function payrollPeriodLabel(ym) {
+  const [y, m] = String(ym || '').split('-').map(Number)
+  if (!y || !m) return ''
+  const start = new Date(y, m - 2, PAYROLL_CUTOFF_DAY + 1), end = new Date(y, m - 1, PAYROLL_CUTOFF_DAY)
+  const f = (dt, withYear) => dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(withYear ? { year: 'numeric' } : {}) })
+  return `${f(start, start.getFullYear() !== end.getFullYear())} – ${f(end, true)}`
+}
+
 // Whole days an assignment has been awaiting the contractor's acceptance
 // (since they were emailed the assignment). Null if we don't have that timestamp.
 function daysWaiting(a) {
@@ -2568,7 +2586,8 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
     return { income, dPaid, evalPaid, evalCount }
   }, [caseGroups, rateMap, dateOverride])
 
-  // ── Monthly payroll: one line per evaluator per case, in the month the report was received ──
+  // ── Monthly payroll: one line per evaluator per case. A report belongs to the payroll month
+  // whose window (26th of the prior month → 25th) contains the day it was received. ──
   const earningByAsg = useMemo(() => new Map(earnings.map(e => [e.assignment_id, e])), [earnings])
   const paidOf = id => cellVal(`e:${id}`)
   const payLines = useMemo(() => assignments
@@ -2578,7 +2597,7 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
       const e = earningByAsg.get(a.id)
       const received = receivedISO(a.submitted_at)
       return {
-        id: a.id, month: received.slice(0, 7), received, contractor_id: a.contractor_id,
+        id: a.id, month: payrollMonthOf(received), received, contractor_id: a.contractor_id,
         evaluator: k.name || '—', field: a.eval_type || '—',
         case_number: a.Cases?.case_number || '', student: a.Cases?.Student_name || '',
         method: k.preferred_payment_method || '',
@@ -2615,8 +2634,8 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
   const [picked, setPicked] = useState(new Set())    // selected assignment ids
   const [payDate, setPayDate] = useState(todayISO())
   const [viewArchive, setViewArchive] = useState(null)
-  // Default to the current month if it has reports, else the newest month.
-  const month = payMonth || (payMonths.find(m => m.month === todayISO().slice(0, 7)) || payMonths[0])?.month || ''
+  // Default to the payroll period we're currently in if it has reports, else the newest one.
+  const month = payMonth || (payMonths.find(m => m.month === payrollMonthOf(todayISO())) || payMonths[0])?.month || ''
   const monthLines = useMemo(() => payLines.filter(l => l.month === month).sort(lineSort), [payLines, month])
   const visibleLines = monthLines.filter(l =>
     (!payEval || l.evaluator === payEval) && (!payField || l.field === payField) &&
@@ -2695,7 +2714,7 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
         <div className="sec-head">
           <h3>Monthly Payroll{month ? ` — ${monthLabel(month)}` : ''}</h3>
           <div className="filter-bar" style={{ margin: 0 }}>
-            <select value={month} onChange={e => pickMonth(e.target.value)} title="Month the reports were received">
+            <select value={month} onChange={e => pickMonth(e.target.value)} title={`Payroll month — covers reports received from the ${PAYROLL_CUTOFF_DAY + 1}th of the prior month through the ${PAYROLL_CUTOFF_DAY}th`}>
               {payMonths.length === 0 && <option value="">No reports received yet</option>}
               {payMonths.map(m => (
                 <option key={m.month} value={m.month}>
@@ -2717,6 +2736,7 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
           </div>
         </div>
         <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap', fontSize: 13, marginBottom: 10 }}>
+          {month && <span><span style={{ color: 'var(--muted)', marginRight: 6 }}>Reports received</span><strong>{payrollPeriodLabel(month)}</strong></span>}
           <span><span style={{ color: 'var(--muted)', marginRight: 6 }}>Evaluations</span><strong>{monthLines.length}</strong></span>
           <span><span style={{ color: 'var(--muted)', marginRight: 6 }}>Month total</span><strong style={{ fontVariantNumeric: 'tabular-nums' }}>${sumOf(monthLines).toLocaleString()}</strong></span>
           <span><span style={{ color: 'var(--muted)', marginRight: 6 }}>Paid</span><strong style={{ color: 'var(--green)', fontVariantNumeric: 'tabular-nums' }}>${(sumOf(monthLines) - sumOf(monthUnpaid)).toLocaleString()}</strong></span>
@@ -2750,7 +2770,7 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
               <th style={{ textAlign: 'right' }}>Earnings</th><th>Report Rec'd</th><th>Date Paid</th>
             </tr></thead>
             <tbody>
-              {visibleLines.length === 0 && <tr><td colSpan={9} style={{ color: '#888' }}>{monthLines.length === 0 ? 'No reports received for this month yet.' : 'No evaluations match these filters.'}</td></tr>}
+              {visibleLines.length === 0 && <tr><td colSpan={9} style={{ color: '#888' }}>{monthLines.length === 0 ? 'No reports received in this payroll period yet.' : 'No evaluations match these filters.'}</td></tr>}
               {visibleLines.map(l => {
                 const paid = paidOf(l.id)
                 return (
@@ -2788,7 +2808,7 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
 
       <div className="card" style={{ marginBottom: 14 }}>
         <div className="card-title">📦 Archived Payroll Months</div>
-        <div style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>A month is filed here automatically once every evaluation in it has been marked paid. Each archive is a frozen copy you can export to Excel as a backup.</div>
+        <div style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>Each payroll month covers reports received from the {PAYROLL_CUTOFF_DAY + 1}th of the prior month through the {PAYROLL_CUTOFF_DAY}th. A month is filed here automatically once every evaluation in it has been marked paid. Each archive is a frozen copy you can export to Excel as a backup.</div>
         <div className="tbl-wrap">
           <table>
             <thead><tr><th>Month</th><th>Archived</th><th>Evaluations</th><th>Total Paid</th><th></th></tr></thead>
