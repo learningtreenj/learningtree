@@ -195,8 +195,12 @@ function AssignmentDetail({ assignment, contractor, onBack }) {
       return false
     }
     setBusy(true); setMsg(null)
-    const patch = { status, testing_date: testingDate || null, notes: notes || null, ...extra }
+    // Once a report is on file the assignment stays Submitted — saving a date or note must
+    // not knock the status back (that hid received reports from the office's Cases page).
+    const effStatus = reportFiles.length > 0 ? 'Submitted' : status
+    const patch = { status: effStatus, testing_date: testingDate || null, notes: notes || null, ...extra }
     const { error } = await supabase.from('Assignments').update(patch).eq('id', a.id)
+    if (!error && effStatus !== status) setStatus(effStatus)
     setMsg(error ? { kind: 'danger', text: error.message } : { kind: 'success', text: 'Saved.' })
     setBusy(false)
     return !error
@@ -365,7 +369,8 @@ function AssignmentDetail({ assignment, contractor, onBack }) {
             <div className="card-title">✏️ Update Status &amp; Schedule</div>
             <div className="form-group">
               <label>Current Status</label>
-              <select value={status} onChange={e => setStatus(e.target.value)}>
+              <select value={reportFiles.length > 0 ? 'Submitted' : status} onChange={e => setStatus(e.target.value)} disabled={reportFiles.length > 0}
+                title={reportFiles.length > 0 ? 'Your report is on file, so this assignment is Submitted. Remove the report below to change the status.' : undefined}>
                 {STATUSES.filter(s => s.toLowerCase() !== 'draft report').map(s => <option key={s} value={s}>{showStatus(s)}</option>)}
                 {!STATUSES.some(s => s.toLowerCase() === (status || '').toLowerCase() && s.toLowerCase() !== 'draft report') && <option value={status}>{showStatus(status)}</option>}
               </select>
