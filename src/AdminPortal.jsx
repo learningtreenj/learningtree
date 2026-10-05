@@ -7,7 +7,7 @@ import DistrictHeatmap from './DistrictHeatmap.jsx'
 import { contractorLanguages, contractorSpeaks } from './contractorLangs.js'
 import { scoreContractors } from './smartAssign.js'
 import { extractTextFromFile } from './extractDocumentText.js'
-import { exportCasesToExcel } from './exportExcel.js'
+import { exportCasesToExcel, exportPayrollToExcel } from './exportExcel.js'
 import { zipSync } from 'fflate'
 
 const EVAL_TYPES = ['Speech', 'Educational', 'Psych', 'Social', 'OT', 'PT']
@@ -187,6 +187,20 @@ function caseStatusCls(label) {
   if (l === 'assigned') return 's-assigned'           // blue
   if (l === 'pending assignment') return 's-unassigned' // red
   return 's-assigned'
+}
+
+// How contractors can be paid (Contractors.preferred_payment_method).
+const PAYMENT_METHODS = ['Direct Deposit', 'Zelle', 'Check', 'Other']
+
+// Calendar day (YYYY-MM-DD) a report was received. Imported legacy rows were stored
+// date-only at midnight UTC — keep that day as-is; real uploads use the local day.
+function receivedISO(ts) {
+  if (!ts) return ''
+  const s = String(ts)
+  if (/T00:00:00(\.0+)?(Z|[+-]00(:?00)?)?$/.test(s)) return s.slice(0, 10)
+  const d = new Date(s)
+  if (isNaN(d)) return s.slice(0, 10)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 // Whole days an assignment has been awaiting the contractor's acceptance
@@ -943,7 +957,7 @@ function paidBtnStyle(isYes, active) {
 
 function CaseList({ cases, assignments, contractors = [], earnings = [], batches = [], loading, onOpen, onChanged }) {
   const [q, setQ] = useState('')
-  const [chip, setChip] = useState('all')
+  const [chip, setChip] = useState('active')
   const [expanded, setExpanded] = useState({})
   const toggle = id => setExpanded(p => ({ ...p, [id]: !p[id] }))
   const [reassignId, setReassignId] = useState(null)
@@ -1832,10 +1846,16 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, qaByAss
                           const files = Array.isArray(a.report_files) && a.report_files.length
                             ? a.report_files
                             : (a.report_url ? [{ path: a.report_url, name: a.report_url.split('/').pop() }] : [])
-                          if (!files.length) return '—'
-                          return files.map((f, i) => (
-                            <div key={f.path || i}><span className="tbl-link" onClick={() => viewReport(f.path)}>📄 {files.length > 1 ? (f.name || f.path.split('/').pop()) : 'View'}</span></div>
-                          ))
+                          const recd = a.submitted_at
+                            ? <div style={{ fontSize: 11, color: 'var(--muted)', whiteSpace: 'nowrap' }} title="Date this evaluator's report was received">Rec'd {fmtDate(receivedISO(a.submitted_at))}</div>
+                            : null
+                          if (!files.length) return recd || '—'
+                          return <>
+                            {files.map((f, i) => (
+                              <div key={f.path || i}><span className="tbl-link" onClick={() => viewReport(f.path)}>📄 {files.length > 1 ? (f.name || f.path.split('/').pop()) : 'View'}</span></div>
+                            ))}
+                            {recd}
+                          </>
                         })()}</td>
                         <td style={{ whiteSpace: 'nowrap' }}>
                           {qaStatusOf(a) === 'approved'
@@ -1972,7 +1992,7 @@ function ContractorList({ contractors, assignments, onChanged, languageFilter = 
   const [creating, setCreating] = useState(false) // true when adding a new contractor
   function startCreate() {
     setForm({ name: '', email: '', phone: '', company_name: '', fields: [], languages: [], county: '',
-      address: '', zip_code: '', current_rate: '', w9_on_file: false, criminal_history_done: false, NJDOE_submitted: '', active: true })
+      address: '', zip_code: '', current_rate: '', preferred_payment_method: '', w9_on_file: false, criminal_history_done: false, NJDOE_submitted: '', active: true })
     setMsg(null); setEditing(null); setCreating(true)
   }
   const [form, setForm] = useState({})
@@ -2030,7 +2050,7 @@ function ContractorList({ contractors, assignments, onChanged, languageFilter = 
       fields, languages, county: k.county || '',
       address: k.address || '', zip_code: k.zip_code != null ? String(k.zip_code) : '', current_rate: k.current_rate || '',
       w9_on_file: !!k.w9_on_file, criminal_history_done: !!k.criminal_history_done, NJDOE_submitted: k.NJDOE_submitted || '',
-      active: k.active !== false,
+      active: k.active !== false, preferred_payment_method: k.preferred_payment_method || '',
     })
     setMsg(null); setEditing(k)
   }
@@ -2052,6 +2072,7 @@ function ContractorList({ contractors, assignments, onChanged, languageFilter = 
       address: form.address || null, zip_code: zip ? Number(zip) : null, current_rate: form.current_rate || null,
       w9_on_file: !!form.w9_on_file, criminal_history_done: !!form.criminal_history_done, NJDOE_submitted: form.NJDOE_submitted || null,
       active: form.active !== false,
+      preferred_payment_method: form.preferred_payment_method || null,
     }
     const { error } = creating
       ? await supabase.from('Contractors').insert(patch)
@@ -2095,7 +2116,16 @@ function ContractorList({ contractors, assignments, onChanged, languageFilter = 
           <MultiCheck selected={form.fields || []} options={CONTRACTOR_FIELDS} onToggle={v => toggleMulti('fields', v)} /></div>
         <div className="form-group"><label>Languages (select all that apply)</label>
           <MultiCheck selected={form.languages || []} options={LANGUAGES} onToggle={v => toggleMulti('languages', v)} /></div>
-        <div className="form-group"><label>Rate</label><input value={form.current_rate} onChange={e => setF('current_rate', e.target.value)} placeholder="e.g. $880" /></div>
+        <div className="form-row">
+          <div className="form-group"><label>Rate</label><input value={form.current_rate} onChange={e => setF('current_rate', e.target.value)} placeholder="e.g. $880" /></div>
+          <div className="form-group"><label>Preferred Payment Method</label>
+            <select value={form.preferred_payment_method || ''} onChange={e => setF('preferred_payment_method', e.target.value)}>
+              <option value="">Not set</option>
+              {PAYMENT_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
+              {form.preferred_payment_method && !PAYMENT_METHODS.includes(form.preferred_payment_method) && <option value={form.preferred_payment_method}>{form.preferred_payment_method}</option>}
+            </select>
+          </div>
+        </div>
         <div className="form-group"><label>Address</label><input value={form.address} onChange={e => setF('address', e.target.value)} /></div>
         <div className="form-row">
           <div className="form-group"><label>County</label><input value={form.county} onChange={e => setF('county', e.target.value)} /></div>
@@ -2425,13 +2455,6 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
   const [busy, setBusy] = useState(false)
   const contractorById = useMemo(() => new Map(contractors.map(k => [k.identifier, k])), [contractors])
   const assignmentById = useMemo(() => new Map(assignments.map(a => [a.id, a])), [assignments])
-  const batchById = useMemo(() => new Map(batches.map(b => [b.id, b])), [batches])
-  // Batch month is stored as YYYY-MM; show it as MM/YYYY.
-  const monthMMYYYY = ym => { const [y, m] = String(ym || '').split('-'); return (m && y) ? `${m}/${y}` : (ym || '—') }
-
-  const unbatched = earnings.filter(e => e.status === 'pending' && !e.payment_batch_id)
-  const unbatchedTotal = unbatched.reduce((n, e) => n + Number(e.amount || 0), 0)
-
   // ── All Earnings: permanent running ledger, one row per case/invoice ──
   const [rateMap, setRateMap] = useState({})
   useEffect(() => { loadRates().then(setRateMap) }, [])
@@ -2545,115 +2568,261 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
     return { income, dPaid, evalPaid, evalCount }
   }, [caseGroups, rateMap, dateOverride])
 
-  async function createBatch() {
+  // ── Monthly payroll: one line per evaluator per case, in the month the report was received ──
+  const earningByAsg = useMemo(() => new Map(earnings.map(e => [e.assignment_id, e])), [earnings])
+  const paidOf = id => cellVal(`e:${id}`)
+  const payLines = useMemo(() => assignments
+    .filter(a => a.contractor_id != null && a.submitted_at)
+    .map(a => {
+      const k = contractorById.get(a.contractor_id) || a.Contractors || {}
+      const e = earningByAsg.get(a.id)
+      const received = receivedISO(a.submitted_at)
+      return {
+        id: a.id, month: received.slice(0, 7), received, contractor_id: a.contractor_id,
+        evaluator: k.name || '—', field: a.eval_type || '—',
+        case_number: a.Cases?.case_number || '', student: a.Cases?.Student_name || '',
+        method: k.preferred_payment_method || '',
+        // Approved reports carry a recorded earning; otherwise use the evaluator's current rate.
+        amount: e ? Number(e.amount || 0) : parseRate(k.current_rate),
+      }
+    }), [assignments, contractorById, earningByAsg])
+  const lineSort = (x, y) => x.evaluator.localeCompare(y.evaluator) || x.student.localeCompare(y.student) || x.field.localeCompare(y.field)
+  const monthLabel = ym => { const [y, m] = String(ym || '').split('-').map(Number); return (y && m) ? new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) : (ym || '—') }
+
+  const [archives, setArchives] = useState([])
+  async function loadArchives() {
+    const { data } = await supabase.from('payroll_archives').select('*').order('month', { ascending: false })
+    setArchives(data || [])
+  }
+  useEffect(() => { loadArchives() }, [])
+  const archiveByMonth = useMemo(() => new Map(archives.map(r => [r.month, r])), [archives])
+
+  // Months that have at least one received report, newest first, with unpaid counts.
+  const payMonths = useMemo(() => {
+    const m = new Map()
+    for (const l of payLines) {
+      const g = m.get(l.month) || { month: l.month, count: 0, unpaid: 0 }
+      g.count++; if (!paidOf(l.id)) g.unpaid++
+      m.set(l.month, g)
+    }
+    return [...m.values()].sort((x, y) => y.month.localeCompare(x.month))
+  }, [payLines, dateOverride])
+
+  const [payMonth, setPayMonth] = useState(null)
+  const [payEval, setPayEval] = useState('')
+  const [payField, setPayField] = useState('')
+  const [payStatus, setPayStatus] = useState('all') // all | unpaid | paid
+  const [picked, setPicked] = useState(new Set())    // selected assignment ids
+  const [payDate, setPayDate] = useState(todayISO())
+  const [viewArchive, setViewArchive] = useState(null)
+  // Default to the current month if it has reports, else the newest month.
+  const month = payMonth || (payMonths.find(m => m.month === todayISO().slice(0, 7)) || payMonths[0])?.month || ''
+  const monthLines = useMemo(() => payLines.filter(l => l.month === month).sort(lineSort), [payLines, month])
+  const visibleLines = monthLines.filter(l =>
+    (!payEval || l.evaluator === payEval) && (!payField || l.field === payField) &&
+    (payStatus === 'all' || (payStatus === 'paid') === !!paidOf(l.id)))
+  const evalOptions = [...new Set(monthLines.map(l => l.evaluator))].sort((x, y) => x.localeCompare(y))
+  const fieldOptions = [...new Set(monthLines.map(l => l.field))].sort((x, y) => x.localeCompare(y))
+  const sumOf = arr => arr.reduce((n, l) => n + Number(l.amount || 0), 0)
+  const monthUnpaid = monthLines.filter(l => !paidOf(l.id))
+  const monthAllPaid = monthLines.length > 0 && monthUnpaid.length === 0
+  const monthArchive = archiveByMonth.get(month)
+  const pickedVisible = visibleLines.filter(l => picked.has(l.id))
+  const visibleUnpaid = visibleLines.filter(l => !paidOf(l.id))
+  const allUnpaidPicked = visibleUnpaid.length > 0 && visibleUnpaid.every(l => picked.has(l.id))
+  const pickMonth = m => { setPayMonth(m); setPicked(new Set()); setPayEval(''); setPayField('') }
+  const togglePick = id => setPicked(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
+  const toggleAll = () => setPicked(allUnpaidPicked ? new Set() : new Set(visibleUnpaid.map(l => l.id)))
+
+  const archiveRowsFor = (m, paidFor = l => paidOf(l.id)) => payLines.filter(l => l.month === m).sort(lineSort).map(l => ({
+    evaluator: l.evaluator, field: l.field, case_number: l.case_number, student: l.student,
+    payment_method: l.method, amount: l.amount, report_received: l.received, date_paid: paidFor(l) || '',
+  }))
+  async function archiveMonth(m, paidFor) {
+    const rows = archiveRowsFor(m, paidFor)
+    const { error } = await supabase.from('payroll_archives').upsert({
+      month: m, archived_at: new Date().toISOString(), row_count: rows.length,
+      total: rows.reduce((n, r) => n + Number(r.amount || 0), 0), rows,
+    })
+    if (error) { setMsg({ kind: 'danger', text: `Could not archive ${monthLabel(m)}: ${error.message}` }); return false }
+    await loadArchives()
+    return true
+  }
+  async function archiveNow() {
     setBusy(true); setMsg(null)
-    const month = new Date().toISOString().slice(0, 7)
-    const { data: batch, error } = await supabase.from('payment_batches')
-      .insert({ batch_month: month, total_amount: unbatchedTotal, status: 'draft' })
-      .select().single()
-    if (error) { setMsg({ kind: 'danger', text: error.message }); setBusy(false); return }
-    const { error: linkErr } = await supabase.from('contractor_earnings')
-      .update({ payment_batch_id: batch.id })
-      .eq('status', 'pending').is('payment_batch_id', null)
-    setMsg(linkErr ? { kind: 'danger', text: linkErr.message }
-      : { kind: 'success', text: `Batch ${month} created with ${unbatched.length} earnings ($${unbatchedTotal.toLocaleString()}).` })
-    onChanged(); setBusy(false)
+    if (await archiveMonth(month)) setMsg({ kind: 'success', text: `${monthLabel(month)} payroll archived — it's saved below and can be exported to Excel any time.` })
+    setBusy(false)
   }
 
-  async function setBatchStatus(batch, action) {
+  // Mark (or clear, with date '') the paid date on a set of evaluator lines. Once every
+  // line in the month is paid, the month is archived automatically.
+  async function setPaid(ids, date) {
+    if (!ids.length) return
+    if (date == null) { setMsg({ kind: 'warn', text: 'Pick a paid date first.' }); return }
     setBusy(true); setMsg(null)
-    if (action === 'approve') {
-      await supabase.from('payment_batches').update({ status: 'approved', approved_at: new Date().toISOString() }).eq('id', batch.id)
-      await supabase.from('contractor_earnings').update({ status: 'approved' }).eq('payment_batch_id', batch.id).eq('status', 'pending')
-    } else {
-      await supabase.from('payment_batches').update({ status: 'paid', paid_at: new Date().toISOString() }).eq('id', batch.id)
-      await supabase.from('contractor_earnings').update({ status: 'paid' }).eq('payment_batch_id', batch.id)
+    for (let i = 0; i < ids.length; i += 200) {
+      const chunk = ids.slice(i, i + 200)
+      const { error } = await supabase.from('Assignments').update({ paid_date: date || null }).in('id', chunk)
+      if (error) { setMsg({ kind: 'danger', text: error.message }); onChanged(); setBusy(false); return }
+      // Keep the contractor's "My Earnings" status in step.
+      await supabase.from('contractor_earnings').update({ status: date ? 'paid' : 'pending' }).in('assignment_id', chunk)
     }
-    onChanged(); setBusy(false)
-  }
-
-  function exportBatchCsv(batch) {
-    const items = earnings.filter(e => e.payment_batch_id === batch.id)
-    // Group by contractor → by case, summing amounts and collecting the eval types.
-    const byContractor = new Map()
-    for (const e of items) {
-      if (!byContractor.has(e.contractor_id)) byContractor.set(e.contractor_id, new Map())
-      const caseMap = byContractor.get(e.contractor_id)
-      const a = assignmentById.get(e.assignment_id)
-      const caseKey = a?.Cases?.id ?? a?.case_id ?? `a${e.assignment_id}`
-      if (!caseMap.has(caseKey)) caseMap.set(caseKey, { a, evals: [], amount: 0 })
-      const row = caseMap.get(caseKey)
-      if (a?.eval_type) row.evals.push(a.eval_type)
-      row.amount += Number(e.amount || 0)
-    }
-
-    const csv = v => `"${String(v ?? '').replace(/"/g, '""')}"`
-    const header = ['Contractor', 'Email', 'Student', 'School District', 'Case #', 'Evaluations', 'Amount', 'School District Payment Received']
-    const lines = [header.map(csv).join(',')]
-    let grandTotal = 0, caseCount = 0
-    const contractorIds = [...byContractor.keys()].sort((x, y) =>
-      (contractorById.get(Number(x))?.name || '').localeCompare(contractorById.get(Number(y))?.name || ''))
-    for (const cid of contractorIds) {
-      const k = contractorById.get(Number(cid))
-      const caseRows = [...byContractor.get(cid).values()].sort((r1, r2) =>
-        (r1.a?.Cases?.case_number || '').localeCompare(r2.a?.Cases?.case_number || ''))
-      for (const r of caseRows) {
-        const kase = r.a?.Cases || {}
-        const evalTypes = [...new Set(r.evals.map(t => t.trim()).filter(Boolean))].join(', ')
-        lines.push([
-          csv(k?.name || 'Unknown'), csv(k?.email || ''), csv(kase.Student_name || ''),
-          csv(kase.School_district || ''), csv(kase.case_number || ''), csv(evalTypes),
-          r.amount, csv(kase.district_paid ? 'Yes' : 'No'),
-        ].join(','))
-        grandTotal += r.amount; caseCount += 1
+    setDateOverride(prev => { const n = { ...prev }; ids.forEach(id => { n[`e:${id}`] = date || '' }); return n })
+    setPicked(new Set())
+    let note = ''
+    if (date) {
+      const idSet = new Set(ids)
+      const paidFor = l => idSet.has(l.id) ? date : paidOf(l.id)
+      if (monthLines.length > 0 && monthLines.every(l => paidFor(l)) && await archiveMonth(month, paidFor)) {
+        note = ` Every ${monthLabel(month)} evaluation is now paid — the month has been archived below.`
       }
     }
-    // Subtotal: number of cases + total owed to contractors.
-    lines.push([csv('TOTAL'), '', '', '', '', csv(`${caseCount} case${caseCount === 1 ? '' : 's'}`), grandTotal, ''].join(','))
+    setMsg({ kind: 'success', text: (date ? `Marked ${ids.length} evaluation${ids.length === 1 ? '' : 's'} paid on ${fmtDate(date)}.` : `Cleared the paid date on ${ids.length} evaluation${ids.length === 1 ? '' : 's'}.`) + note })
+    onChanged(); setBusy(false)
+  }
 
-    const blob = new Blob([lines.join('\n')], { type: 'text/csv' })
-    const url = URL.createObjectURL(blob)
-    const el = document.createElement('a')
-    el.href = url; el.download = `payment-batch-${batch.batch_month}-${batch.id}.csv`; el.click()
-    URL.revokeObjectURL(url)
+  async function setMethod(contractorId, method) {
+    setBusy(true); setMsg(null)
+    const { error } = await supabase.from('Contractors').update({ preferred_payment_method: method || null }).eq('identifier', contractorId)
+    if (error) setMsg({ kind: 'danger', text: error.message })
+    onChanged(); setBusy(false)
   }
 
   return (
     <>
       {msg && <div className={`alert alert-${msg.kind}`}>{msg.text}</div>}
       <div className="card" style={{ marginBottom: 14 }}>
-        <div className="sec-head" style={{ marginBottom: 0 }}>
-          <h3>Ready for Payroll</h3>
-          <button className="btn btn-primary btn-sm" disabled={busy || unbatched.length === 0} onClick={createBatch}>
-            ➕ Create Payment Batch ({unbatched.length} earnings · ${unbatchedTotal.toLocaleString()})
-          </button>
+        <div className="sec-head">
+          <h3>Monthly Payroll{month ? ` — ${monthLabel(month)}` : ''}</h3>
+          <div className="filter-bar" style={{ margin: 0 }}>
+            <select value={month} onChange={e => pickMonth(e.target.value)} title="Month the reports were received">
+              {payMonths.length === 0 && <option value="">No reports received yet</option>}
+              {payMonths.map(m => (
+                <option key={m.month} value={m.month}>
+                  {monthLabel(m.month)} — {m.unpaid ? `${m.unpaid} unpaid` : 'all paid'}{archiveByMonth.has(m.month) ? ' · archived' : ''}
+                </option>
+              ))}
+            </select>
+            <select value={payEval} onChange={e => setPayEval(e.target.value)}>
+              <option value="">All evaluators</option>
+              {evalOptions.map(n => <option key={n} value={n}>{n}</option>)}
+            </select>
+            <select value={payField} onChange={e => setPayField(e.target.value)}>
+              <option value="">All fields</option>
+              {fieldOptions.map(n => <option key={n} value={n}>{n}</option>)}
+            </select>
+            {[['all', 'All'], ['unpaid', 'Unpaid'], ['paid', 'Paid']].map(([id, label]) => (
+              <span key={id} className={`filter-chip ${payStatus === id ? 'active' : ''}`} onClick={() => setPayStatus(id)}>{label}</span>
+            ))}
+          </div>
         </div>
-        <div style={{ marginTop: 10, fontSize: 13, color: '#555' }}>
-          Earnings are created when reports pass QA review. At month end: create a batch, export the CSV
-          into your payments provider (e.g. Gusto), then mark the batch approved and paid.
+        <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap', fontSize: 13, marginBottom: 10 }}>
+          <span><span style={{ color: 'var(--muted)', marginRight: 6 }}>Evaluations</span><strong>{monthLines.length}</strong></span>
+          <span><span style={{ color: 'var(--muted)', marginRight: 6 }}>Month total</span><strong style={{ fontVariantNumeric: 'tabular-nums' }}>${sumOf(monthLines).toLocaleString()}</strong></span>
+          <span><span style={{ color: 'var(--muted)', marginRight: 6 }}>Paid</span><strong style={{ color: 'var(--green)', fontVariantNumeric: 'tabular-nums' }}>${(sumOf(monthLines) - sumOf(monthUnpaid)).toLocaleString()}</strong></span>
+          <span><span style={{ color: 'var(--muted)', marginRight: 6 }}>Unpaid</span><strong style={{ color: monthUnpaid.length ? 'var(--red)' : undefined, fontVariantNumeric: 'tabular-nums' }}>${sumOf(monthUnpaid).toLocaleString()} ({monthUnpaid.length})</strong></span>
+          {monthArchive && <span className="badge-s s-completed">Archived {fmtDate(receivedISO(monthArchive.archived_at))}</span>}
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
+          <label style={{ fontSize: 12, color: '#555', display: 'inline-flex', alignItems: 'center', gap: 6 }}>Date paid
+            <input type="date" value={payDate} onChange={e => setPayDate(e.target.value)} style={{ padding: '4px 6px', fontSize: 13, border: '1px solid var(--border)', borderRadius: 5 }} />
+          </label>
+          <button className="btn btn-primary btn-sm" disabled={busy || !payDate || pickedVisible.length === 0} onClick={() => setPaid(pickedVisible.map(l => l.id), payDate)}>
+            ✓ Mark selected paid ({pickedVisible.length})
+          </button>
+          <button className="btn btn-secondary btn-sm" disabled={busy || !payDate || visibleUnpaid.length === 0}
+            title="Marks every unpaid evaluation shown below as paid on the date above"
+            onClick={() => { if (window.confirm(`Mark all ${visibleUnpaid.length} unpaid evaluation${visibleUnpaid.length === 1 ? '' : 's'} shown as paid on ${fmtDate(payDate)}?`)) setPaid(visibleUnpaid.map(l => l.id), payDate) }}>
+            ✓ Mark all unpaid as paid ({visibleUnpaid.length})
+          </button>
+          {pickedVisible.some(l => paidOf(l.id)) &&
+            <button className="btn btn-ghost btn-sm" disabled={busy} title="Undo — clears the paid date on the selected rows" onClick={() => setPaid(pickedVisible.filter(l => paidOf(l.id)).map(l => l.id), '')}>↩ Clear paid date</button>}
+          <span style={{ flex: 1 }} />
+          {monthAllPaid && <button className="btn btn-secondary btn-sm" disabled={busy} onClick={archiveNow}>📦 {monthArchive ? 'Update archive' : 'Archive month'}</button>}
+          <button className="btn btn-ghost btn-sm" disabled={monthLines.length === 0} onClick={() => exportPayrollToExcel(month, archiveRowsFor(month))}>⬇ Export to Excel</button>
+        </div>
+        {monthAllPaid && !monthArchive && <div className="alert alert-success">Every evaluation for {monthLabel(month)} is paid. Click <strong>Archive month</strong> to file it below.</div>}
+        <div className="tbl-wrap sticky-head">
+          <table>
+            <thead><tr>
+              <th style={{ width: 30 }}><input type="checkbox" checked={allUnpaidPicked} onChange={toggleAll} disabled={visibleUnpaid.length === 0} title="Select all unpaid shown" /></th>
+              <th>Evaluator</th><th>Field</th><th>Case #</th><th>Student Name</th><th>Payment Method</th>
+              <th style={{ textAlign: 'right' }}>Earnings</th><th>Report Rec'd</th><th>Date Paid</th>
+            </tr></thead>
+            <tbody>
+              {visibleLines.length === 0 && <tr><td colSpan={9} style={{ color: '#888' }}>{monthLines.length === 0 ? 'No reports received for this month yet.' : 'No evaluations match these filters.'}</td></tr>}
+              {visibleLines.map(l => {
+                const paid = paidOf(l.id)
+                return (
+                  <tr key={l.id} style={{ background: picked.has(l.id) ? 'var(--accent-light)' : undefined }}>
+                    <td><input type="checkbox" checked={picked.has(l.id)} onChange={() => togglePick(l.id)} /></td>
+                    <td style={{ fontWeight: 600 }}>{l.evaluator}</td>
+                    <td>{l.field}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}>{l.case_number || '—'}</td>
+                    <td>{l.student || '—'}</td>
+                    <td>
+                      <select value={l.method} disabled={busy} onChange={e => setMethod(l.contractor_id, e.target.value)}
+                        title="Saved on the evaluator's profile — applies to all of their rows"
+                        style={{ padding: '2px 4px', fontSize: 12, border: '1px solid var(--border)', borderRadius: 5, background: '#fff', color: l.method ? undefined : '#9aa1ab' }}>
+                        <option value="">— set</option>
+                        {PAYMENT_METHODS.map(m => <option key={m} value={m}>{m}</option>)}
+                        {l.method && !PAYMENT_METHODS.includes(l.method) && <option value={l.method}>{l.method}</option>}
+                      </select>
+                    </td>
+                    <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>${Number(l.amount || 0).toLocaleString()}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}>{fmtDate(l.received)}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}>{paid ? <span className="badge-s s-completed">Paid {fmtDate(paid)}</span> : <span className="badge-s s-pending">Unpaid</span>}</td>
+                  </tr>
+                )
+              })}
+              {visibleLines.length > 0 && (
+                <tr style={{ fontWeight: 700, background: '#f0f2f5' }}>
+                  <td></td><td colSpan={5}>Total — {visibleLines.length} evaluation{visibleLines.length === 1 ? '' : 's'} shown</td>
+                  <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>${sumOf(visibleLines).toLocaleString()}</td><td></td><td></td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
 
       <div className="card" style={{ marginBottom: 14 }}>
-        <div className="card-title">Payment Batches</div>
+        <div className="card-title">📦 Archived Payroll Months</div>
+        <div style={{ fontSize: 12, color: '#888', marginBottom: 8 }}>A month is filed here automatically once every evaluation in it has been marked paid. Each archive is a frozen copy you can export to Excel as a backup.</div>
         <div className="tbl-wrap">
           <table>
-            <thead><tr><th>Month</th><th>Total</th><th>Status</th><th>Approved</th><th>Paid</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Month</th><th>Archived</th><th>Evaluations</th><th>Total Paid</th><th></th></tr></thead>
             <tbody>
-              {batches.length === 0 && <tr><td colSpan={6} style={{ color: '#888' }}>No batches yet.</td></tr>}
-              {batches.map(b => (
-                <tr key={b.id}>
-                  <td style={{ fontWeight: 600 }}>{b.batch_month} <span style={{ color: '#888', fontWeight: 400 }}>#{b.id}</span></td>
-                  <td>${Number(b.total_amount || 0).toLocaleString()}</td>
-                  <td><Badge status={b.status} /></td>
-                  <td>{b.approved_at ? fmtDate(b.approved_at.slice(0, 10)) : '—'}</td>
-                  <td>{b.paid_at ? fmtDate(b.paid_at.slice(0, 10)) : '—'}</td>
-                  <td style={{ display: 'flex', gap: 6 }}>
-                    <button className="btn btn-ghost btn-sm" onClick={() => exportBatchCsv(b)}>⬇ CSV</button>
-                    {b.status === 'draft' && <button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => setBatchStatus(b, 'approve')}>Approve</button>}
-                    {b.status === 'approved' && <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => setBatchStatus(b, 'paid')}>Mark Paid</button>}
-                  </td>
-                </tr>
+              {archives.length === 0 && <tr><td colSpan={5} style={{ color: '#888' }}>No months archived yet.</td></tr>}
+              {archives.map(r => (
+                <Fragment key={r.month}>
+                  <tr>
+                    <td style={{ fontWeight: 600 }}>{monthLabel(r.month)}</td>
+                    <td>{fmtDate(receivedISO(r.archived_at))}</td>
+                    <td>{r.row_count}</td>
+                    <td style={{ fontVariantNumeric: 'tabular-nums' }}>${Number(r.total || 0).toLocaleString()}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      <button className="btn btn-ghost btn-sm" onClick={() => setViewArchive(viewArchive === r.month ? null : r.month)}>{viewArchive === r.month ? 'Hide' : 'View'}</button>{' '}
+                      <button className="btn btn-secondary btn-sm" onClick={() => exportPayrollToExcel(r.month, r.rows || [])}>⬇ Excel</button>
+                    </td>
+                  </tr>
+                  {viewArchive === r.month && (
+                    <tr><td colSpan={5} style={{ background: '#f8fafc', padding: 10 }}>
+                      <table>
+                        <thead><tr><th>Evaluator</th><th>Field</th><th>Case #</th><th>Student Name</th><th>Payment Method</th><th style={{ textAlign: 'right' }}>Earnings</th><th>Date Paid</th></tr></thead>
+                        <tbody>
+                          {(r.rows || []).map((x, i) => (
+                            <tr key={i}>
+                              <td>{x.evaluator}</td><td>{x.field}</td><td>{x.case_number || '—'}</td><td>{x.student || '—'}</td><td>{x.payment_method || '—'}</td>
+                              <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>${Number(x.amount || 0).toLocaleString()}</td>
+                              <td>{x.date_paid ? fmtDate(x.date_paid) : '—'}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </td></tr>
+                  )}
+                </Fragment>
               ))}
             </tbody>
           </table>
@@ -2732,7 +2901,7 @@ const QA_CHECKS = [
 ]
 
 function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
-  const [tab, setTab] = useState('all')
+  const [tab, setTab] = useState('pending')
   const [selectedId, setSelectedId] = useState(null)
   const [form, setForm] = useState(null)
   const [msg, setMsg] = useState(null)

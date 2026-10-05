@@ -80,6 +80,31 @@ export function buildCasesWorkbook(cases, assignments) {
   return wb
 }
 
+// One month of contractor payroll (month = 'YYYY-MM'; rows = payroll lines / an archive snapshot).
+export function exportPayrollToExcel(month, rows) {
+  const [y, m] = String(month || '').split('-').map(Number)
+  const monthEnd = (y && m) ? `${m}/${new Date(y, m, 0).getDate()}/${y}` : (month || '')
+  const out = (rows || []).map((r, i) => ({
+    '#': i + 1,
+    'Month': monthEnd,
+    'Evaluator': r.evaluator || '',
+    'Field': r.field || '',
+    'Case #': r.case_number || '',
+    'Student Name': r.student || '',
+    'Earnings': Number(r.amount || 0),
+    'Preferred Payment Method': r.payment_method || '',
+    'Report Received': isoDate(r.report_received),
+    'Date Paid': isoDate(r.date_paid),
+  }))
+  out.push({ '#': '', 'Month': '', 'Evaluator': 'TOTAL', 'Field': '', 'Case #': '', 'Student Name': `${(rows || []).length} evaluations`,
+    'Earnings': (rows || []).reduce((n, r) => n + Number(r.amount || 0), 0), 'Preferred Payment Method': '', 'Report Received': '', 'Date Paid': '' })
+  const ws = XLSX.utils.json_to_sheet(out)
+  ws['!cols'] = [{ wch: 5 }, { wch: 11 }, { wch: 26 }, { wch: 16 }, { wch: 10 }, { wch: 30 }, { wch: 10 }, { wch: 24 }, { wch: 15 }, { wch: 12 }]
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, (y && m) ? new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long' }) : 'Payroll')
+  XLSX.writeFile(wb, `learning-tree-payroll-${month}.xlsx`)
+}
+
 export function exportCasesToExcel(cases, assignments) {
   const wb = buildCasesWorkbook(cases, assignments)
   const today = new Date().toISOString().slice(0, 10)
