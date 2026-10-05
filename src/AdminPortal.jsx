@@ -180,6 +180,15 @@ function caseStatusLabel(c, asg) {
   if (allSubmitted) return 'Report Received'
   return 'Assigned'
 }
+// A case is "due soon" when reports are still outstanding (not Complete, not all received)
+// and it is due within 7 days or already overdue. The sidebar "Cases" badge and the Cases
+// page "Due Soon" chip both use this, so the two numbers always agree.
+function caseDueSoon(c, asg) {
+  const lbl = caseStatusLabel(c, asg)
+  if (lbl === 'Complete' || lbl === 'Report Received') return false
+  const soon = d => { const n = daysLeft(d); return n !== null && n <= 7 }
+  return soon(c.Report_Due_date) || (asg || []).some(a => (a.status || '').toLowerCase() !== 'submitted' && soon(a.report_due_date))
+}
 function caseStatusCls(label) {
   const l = (label || '').toLowerCase()
   if (l === 'complete') return 's-completed'          // green
@@ -277,12 +286,18 @@ export default function AdminPortal({ user }) {
   const dueThisWeek = openAssignments.filter(x => { const n = daysLeft(x.report_due_date); return n !== null && n <= 7 })
   const qaByAssignment = useMemo(() => new Map(qaReviews.map(q => [q.assignment_id, q])), [qaReviews])
   const awaitingQa = assignments.filter(a => a.submitted_at && qaByAssignment.get(a.id)?.qa_status !== 'approved')
+  // Sidebar "Cases" badge = number of CASES due soon / overdue (same list as the Due Soon chip).
+  const dueSoonCaseCount = useMemo(() => {
+    const by = {}
+    for (const a of assignments) { (by[a.case_id] = by[a.case_id] || []).push(a) }
+    return cases.filter(c => caseDueSoon(c, by[c.id] || [])).length
+  }, [cases, assignments])
 
   const nav = [
     { label: 'Operations', items: [
       { id: 'dashboard', icon: '📊', label: 'Dashboard' },
       { id: 'referral', icon: '📥', label: 'New Referral' },
-      { id: 'cases', icon: '📋', label: 'Cases', badge: dueThisWeek.length || null },
+      { id: 'cases', icon: '📋', label: 'Cases', badge: dueSoonCaseCount || null },
       { id: 'contractors', icon: '👥', label: 'Contractors' },
     ]},
     { label: 'Documents & Finance', items: [
@@ -1029,6 +1044,9 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
     return m
   }, [assignments])
 
+  // Cases due soon / overdue — shown as the red counter on the "Due Soon" chip (and the sidebar).
+  const dueSoonCount = useMemo(() => cases.filter(c => caseDueSoon(c, byCase[c.id] || [])).length, [cases, byCase])
+
   // Manually mark whether the school district has paid Learning Tree for a case.
   // ── Mail Date: Excel-style select / copy / paste across rows ──
   const [mailSel, setMailSel] = useState(new Set()) // selected case ids
@@ -1221,12 +1239,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
     const done = caseStatusLabel(c, asg) === 'Complete'
     if (chip === 'active' && done) return false
     if (chip === 'completed' && !done) return false
-    if (chip === 'due') {
-      if (done) return false   // a completed case is never "due soon"
-      const soon = asg.some(a => { const n = daysLeft(a.report_due_date); return n !== null && n <= 7 && (a.status || '').toLowerCase() !== 'submitted' })
-      const caseSoon = (() => { const n = daysLeft(c.Report_Due_date); return n !== null && n <= 7 })()
-      if (!soon && !caseSoon) return false
-    }
+    if (chip === 'due' && !caseDueSoon(c, asg)) return false
     const evalNames = (byCase[c.id] || []).map(a => `${a.eval_type || ''} ${a.Contractors?.name || ''}`).join(' ')
     const hay = `${c.case_number || ''} ${c.Student_name || ''} ${c.School_district || ''} ${c.evaluation_type || ''} ${evalNames}`.toLowerCase()
     return hay.includes(q.toLowerCase())
@@ -1298,7 +1311,18 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
         <div className="filter-bar" style={{ margin: 0 }}>
           <input type="text" placeholder="🔍 Search case #, student, district…" value={q} onChange={e => setQ(e.target.value)} />
           {[['active', 'Active'], ['due', 'Due Soon'], ['completed', 'Completed'], ['all', 'All']].map(([id, label]) => (
-            <span key={id} className={`filter-chip ${chip === id ? 'active' : ''}`} onClick={() => setChip(id)}>{label}</span>
+            <span key={id} className={`filter-chip ${chip === id ? 'active' : ''}`} onClick={() => setChip(id)}
+              style={id === 'due' ? { position: 'relative', marginRight: dueSoonCount > 0 ? 6 : undefined } : undefined}>
+              {label}
+              {id === 'due' && dueSoonCount > 0 && (
+                <span title={`${dueSoonCount} case${dueSoonCount === 1 ? '' : 's'} due within 7 days or overdue — same number as the red badge next to "Cases" in the sidebar`}
+                  style={{
+                    position: 'absolute', top: -9, right: -9, minWidth: 19, height: 19, padding: '0 5px', boxSizing: 'border-box',
+                    borderRadius: 10, background: '#e53935', color: '#fff', fontSize: 11, fontWeight: 700, lineHeight: '19px',
+                    textAlign: 'center', boxShadow: '0 0 0 2px #fff, 0 1px 3px rgba(0,0,0,.3)', pointerEvents: 'none',
+                  }}>{dueSoonCount}</span>
+              )}
+            </span>
           ))}
           <button className="btn btn-secondary btn-sm" title="Download all cases and assignments as an Excel workbook"
             disabled={cases.length === 0}
@@ -1343,7 +1367,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
               const progress = caseProgressText(c, asg)           // In Progress | Complete
               const dl = daysLeft(c.Report_Due_date)
               const pastDue = !complete && !allReceived && dl !== null && dl < 0 // overdue, reports not all in
-              const dueSoon = !complete && !allReceived && dl !== null && dl >= 0 && dl < 7 // not all in, due within a week
+              const dueSoon = !complete && !allReceived && dl !== null && dl >= 0 && dl <= 7 // not all in, due within a week
               const rowStyle = complete ? { background: 'var(--gray-bg)', color: 'var(--muted)' }
                 : allReceived ? { background: '#e4f6ea' }
                 : pastDue ? { background: '#fde5e5' }
