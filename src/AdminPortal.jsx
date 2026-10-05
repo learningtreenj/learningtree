@@ -2979,6 +2979,8 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
   }
 
   const submitted = assignments.filter(a => a.submitted_at)
+  // Reports awaiting approval — the red counter on the Pending Review chip (matches the sidebar badge).
+  const pendingCount = submitted.filter(a => qaByAssignment.get(a.id)?.qa_status !== 'approved').length
   const rows = submitted
     .filter(a => tab === 'all' || qaByAssignment.get(a.id)?.qa_status !== 'approved')
     .sort((a, b) => {
@@ -3167,7 +3169,18 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
     <>
       <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
         {[['all', 'All Submitted'], ['pending', `Pending Review`]].map(([id, label]) => (
-          <span key={id} className={`filter-chip ${tab === id ? 'active' : ''}`} onClick={() => { setTab(id); setSelectedId(null) }}>{label}</span>
+          <span key={id} className={`filter-chip ${tab === id ? 'active' : ''}`} onClick={() => { setTab(id); setSelectedId(null) }}
+            style={id === 'pending' ? { position: 'relative' } : undefined}>
+            {label}
+            {id === 'pending' && pendingCount > 0 && (
+              <span title={`${pendingCount} submitted report${pendingCount === 1 ? '' : 's'} not yet approved — same number as the red badge next to "Report Review" in the sidebar`}
+                style={{
+                  position: 'absolute', top: -9, right: -9, minWidth: 19, height: 19, padding: '0 5px', boxSizing: 'border-box',
+                  borderRadius: 10, background: '#e53935', color: '#fff', fontSize: 11, fontWeight: 700, lineHeight: '19px',
+                  textAlign: 'center', boxShadow: '0 0 0 2px #fff, 0 1px 3px rgba(0,0,0,.3)', pointerEvents: 'none',
+                }}>{pendingCount}</span>
+            )}
+          </span>
         ))}
       </div>
       {msg && <div className={`alert alert-${msg.kind}`}>{msg.text}</div>}
