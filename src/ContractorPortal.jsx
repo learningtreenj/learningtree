@@ -12,20 +12,24 @@ export default function ContractorPortal({ contractor }) {
   const [selected, setSelected] = useState(null)
   const [loading, setLoading] = useState(true)
   const [notifications, setNotifications] = useState([])
+  const [requests, setRequests] = useState([])   // interpreting / translation appointment requests
 
   async function load() {
     setLoading(true)
-    const [a, e, n] = await Promise.all([
+    const [a, e, n, r] = await Promise.all([
       supabase.from('Assignments').select('*, Cases(*)')
         .order('report_due_date', { ascending: true, nullsFirst: false }),
       supabase.from('contractor_earnings').select('*, payment_batches(batch_month, status)')
         .order('billable_date', { ascending: false }),
       supabase.from('contractor_notifications').select('*').eq('contractor_id', contractor.identifier)
         .order('created_at', { ascending: false }),
+      supabase.from('interpreter_requests').select('*').eq('contractor_id', contractor.identifier)
+        .order('appointment_date', { ascending: true }).order('start_time', { ascending: true }),
     ])
     if (!a.error) setAssignments(a.data || [])
     if (!e.error) setEarnings(e.data || [])
     if (!n.error) setNotifications(n.data || [])
+    if (!r.error) setRequests(r.data || [])
     setLoading(false)
   }
   useEffect(() => { load() }, [])
@@ -47,6 +51,8 @@ export default function ContractorPortal({ contractor }) {
     { label: 'My Work', items: [
       { id: 'assignments', icon: '📋', label: 'My Assignments', badge: open.length || null },
       { id: 'notifications', icon: '🔔', label: 'Notifications', badge: unread.length || null },
+      ...((requests.length > 0 || /translat|interpret/i.test(contractor.field || ''))
+        ? [{ id: 'interpreting', icon: '🗣️', label: 'Interpreting Requests', badge: requests.filter(r => r.status === 'sent').length || null }] : []),
     ]},
     { label: 'Account', items: [
       { id: 'profile', icon: '👤', label: 'My Profile' },
@@ -55,7 +61,7 @@ export default function ContractorPortal({ contractor }) {
     ]},
   ]
 
-  const titles = { assignments: 'My Assignments', notifications: 'Notifications', detail: 'Assignment Detail', profile: 'My Profile', payouts: 'My Earnings', help: 'Help & Support' }
+  const titles = { assignments: 'My Assignments', notifications: 'Notifications', interpreting: 'Interpreting Requests', detail: 'Assignment Detail', profile: 'My Profile', payouts: 'My Earnings', help: 'Help & Support' }
 
   return (
     <Shell brand="BEval Portal" sub="Contractor View"
@@ -75,7 +81,8 @@ export default function ContractorPortal({ contractor }) {
         <AssignmentList assignments={assignments} loading={loading} dueSoonCount={dueSoon.length}
           onOpen={a => { setSelected(a); setScreen('detail') }} />
       )}
-      {screen === 'notifications' && <Notifications items={notifications} onSeen={markNotificationsRead} />}
+      {screen === 'notifications' && <Notifications items={notifications} onSeen={markNotificationsRead} onOpenRequests={() => setScreen('interpreting')} />}
+      {screen === 'interpreting' && <InterpretingRequests requests={requests} onChanged={load} />}
       {screen === 'detail' && selected && (
         <AssignmentDetail assignment={selected} contractor={contractor}
           onBack={() => { setScreen('assignments'); load() }}
@@ -90,7 +97,90 @@ export default function ContractorPortal({ contractor }) {
 
 // Notices from the office (e.g. "Payment sent"). Anything unread when the page opens is
 // flagged "New" for this visit and then marked read.
-function Notifications({ items, onSeen }) {
+// "13:30:00" -> "1:30 PM"
+function fmtTime(t) {
+  if (!t) return ''
+  const [h, m] = String(t).split(':').map(Number)
+  if (isNaN(h)) return String(t)
+  return `${((h + 11) % 12) + 1}:${String(m || 0).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`
+}
+
+// Appointment requests from the office for interpreting / translation work.
+function InterpretingRequests({ requests, onChanged }) {
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState(null)
+  const [declining, setDeclining] = useState(null)   // request id
+  const [reason, setReason] = useState('')
+
+  async function respond(r, status) {
+    setBusy(true); setMsg(null)
+    const patch = { status, responded_at: new Date().toISOString(), decline_reason: status === 'declined' ? (reason.trim() || null) : null }
+    const { error } = await supabase.from('interpreter_requests').update(patch).eq('id', r.id)
+    if (error) setMsg({ kind: 'danger', text: error.message })
+    else {
+      setMsg(status === 'accepted'
+        ? { kind: 'success', text: 'Accepted — thank you! The office can see your response.' }
+        : { kind: 'info', text: 'Declined. The office has been notified and will find someone else.' })
+      setDeclining(null); setReason('')
+      onChanged()
+    }
+    setBusy(false)
+  }
+
+  const when = r => `${fmtDate(r.appointment_date)}${r.start_time ? ` · ${fmtTime(r.start_time)}` : ''}${r.end_time ? ` – ${fmtTime(r.end_time)}` : ''}`
+  const badge = r => r.status === 'accepted' ? <span className="badge-s s-completed">✓ Accepted</span>
+    : r.status === 'declined' ? <span className="badge-s s-overdue">Declined</span>
+    : r.status === 'cancelled' ? <span className="badge-s s-pending">Cancelled by office</span>
+    : <span className="badge-s s-scheduled">⚠ Response needed</span>
+  const pending = requests.filter(r => r.status === 'sent')
+  const others = requests.filter(r => r.status !== 'sent')
+  const card = r => (
+    <div key={r.id} className="card" style={{ marginBottom: 12, border: r.status === 'sent' ? '2px solid #ffc107' : undefined, background: r.status === 'sent' ? '#fffbeb' : undefined }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+        <div>
+          <div style={{ fontWeight: 800, fontSize: 15 }}>{when(r)}</div>
+          <div style={{ fontSize: 13, color: '#555', marginTop: 2 }}>
+            {[r.school_district, r.location].filter(Boolean).join(' — ') || 'Location to be confirmed'}{r.language ? ` · ${r.language}` : ''}
+          </div>
+        </div>
+        {badge(r)}
+      </div>
+      {r.notes && <div style={{ fontSize: 13, marginTop: 8, whiteSpace: 'pre-wrap' }}>{r.notes}</div>}
+      {r.status === 'sent' && (
+        declining === r.id ? (
+          <div style={{ marginTop: 10 }}>
+            <div className="form-group">
+              <label>Reason for declining (optional)</label>
+              <textarea value={reason} onChange={e => setReason(e.target.value)} placeholder="e.g. not available at that time" />
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => respond(r, 'declined')}>Confirm decline</button>
+              <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => { setDeclining(null); setReason('') }}>Back</button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+            <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => respond(r, 'accepted')}>✅ Accept</button>
+            <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setDeclining(r.id)}>Decline…</button>
+          </div>
+        )
+      )}
+      {r.status === 'declined' && r.decline_reason && <div style={{ fontSize: 12, color: '#888', marginTop: 6 }}>Your reason: “{r.decline_reason}”</div>}
+    </div>
+  )
+  return (
+    <>
+      {msg && <div className={`alert alert-${msg.kind}`}>{msg.text}</div>}
+      {requests.length === 0 && <div className="card" style={{ color: '#888' }}>No interpreting or translation requests yet. When the office books you for an appointment it will appear here for you to accept or decline.</div>}
+      {pending.length > 0 && <div className="card-title" style={{ marginBottom: 8 }}>Waiting for your response ({pending.length})</div>}
+      {pending.map(card)}
+      {others.length > 0 && <div className="card-title" style={{ margin: '14px 0 8px' }}>Earlier requests</div>}
+      {others.map(card)}
+    </>
+  )
+}
+
+function Notifications({ items, onSeen, onOpenRequests }) {
   const [newIds] = useState(() => new Set(items.filter(n => !n.read_at).map(n => n.id)))
   useEffect(() => { onSeen() }, [])
   const money = v => `$${Number(v || 0).toLocaleString()}`
@@ -103,12 +193,13 @@ function Notifications({ items, onSeen }) {
           <div key={n.id} className="card" style={{ marginBottom: 12, border: newIds.has(n.id) ? '2px solid var(--green)' : undefined }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
               <div className="card-title" style={{ marginBottom: 4 }}>
-                {n.kind === 'payment' ? '💵 ' : '🔔 '}{n.title}
+                {n.kind === 'payment' ? '💵 ' : n.kind === 'interpreter_request' ? '🗣️ ' : '🔔 '}{n.title}
                 {newIds.has(n.id) && <span className="badge-s s-completed" style={{ marginLeft: 8 }}>New</span>}
               </div>
               <span style={{ fontSize: 12, color: '#888' }}>{new Date(n.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span>
             </div>
             {n.body && <div style={{ fontSize: 13, color: '#444', marginBottom: lines.length ? 10 : 0 }}>{n.body}</div>}
+            {n.kind === 'interpreter_request' && onOpenRequests && <button className="btn btn-secondary btn-sm" style={{ marginTop: 8 }} onClick={onOpenRequests}>Open Interpreting Requests</button>}
             {lines.length > 0 && (
               <div className="tbl-wrap">
                 <table>

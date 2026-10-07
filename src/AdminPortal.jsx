@@ -299,6 +299,7 @@ export default function AdminPortal({ user }) {
       { id: 'referral', icon: '📥', label: 'New Referral' },
       { id: 'cases', icon: '📋', label: 'Cases', badge: dueSoonCaseCount || null },
       { id: 'contractors', icon: '👥', label: 'Contractors' },
+      { id: 'interpreters', icon: '🗣️', label: 'Interpreters' },
     ]},
     { label: 'Documents & Finance', items: [
       { id: 'qa', icon: '🔍', label: 'Report Review', badge: awaitingQa.length || null },
@@ -312,7 +313,7 @@ export default function AdminPortal({ user }) {
     ]},
   ]
 
-  const titles = { dashboard: 'Dashboard', referral: 'New Referral Intake', cases: 'Cases', casedetail: 'Case Detail', contractors: 'Contractors', qa: 'Report Review & QA', invoices: 'Client Invoices', payroll: 'Payroll & Payment Batches', rates: 'Language Rate Table', due: 'Due Date Monitor', emaillog: 'Email Log' }
+  const titles = { dashboard: 'Dashboard', referral: 'New Referral Intake', cases: 'Cases', casedetail: 'Case Detail', contractors: 'Contractors', interpreters: 'Translators & Interpreters', qa: 'Report Review & QA', invoices: 'Client Invoices', payroll: 'Payroll & Payment Batches', rates: 'Language Rate Table', due: 'Due Date Monitor', emaillog: 'Email Log' }
 
   return (
     <Shell brand="BEval Portal" sub="Admin / Coordinator"
@@ -331,6 +332,7 @@ export default function AdminPortal({ user }) {
         onOpen={c => { setSelectedCase(c); setScreen('casedetail') }} onChanged={load} />}
       {screen === 'casedetail' && selectedCase && <CaseDetail caseRow={selectedCase} assignments={assignments.filter(a => a.case_id === selectedCase.id)}
         allAssignments={assignments} contractors={contractors} qaByAssignment={qaByAssignment} earnings={earnings} onBack={() => setScreen('cases')} onChanged={load} />}
+      {screen === 'interpreters' && <InterpreterRequests contractors={contractors} />}
       {screen === 'contractors' && <ContractorList contractors={contractors} assignments={assignments} onChanged={load}
         languageFilter={contractorLang} onClearLanguageFilter={() => setContractorLang(null)} />}
       {screen === 'qa' && <QaQueue assignments={assignments} qaByAssignment={qaByAssignment} earnings={earnings} onChanged={load} />}
@@ -3055,6 +3057,221 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
               <button className="btn btn-ghost" disabled={busy} onClick={() => setNotifyOpen(false)}>No, go back</button>
               <button className="btn btn-primary" disabled={busy} onClick={sendPaidNotifications}>{busy ? 'Sending…' : 'Yes, send'}</button>
             </div>
+          </div>
+        </div>
+      )}
+    </>
+  )
+}
+
+// "13:30:00" -> "1:30 PM"
+function fmtTime(t) {
+  if (!t) return ''
+  const [h, m] = String(t).split(':').map(Number)
+  if (isNaN(h)) return String(t)
+  return `${((h + 11) % 12) + 1}:${String(m || 0).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`
+}
+const isInterpreter = k => /translat|interpret/i.test(k?.field || '')
+
+// Appointment requests for translators / interpreters. Sending a request posts a notice in
+// the translator's portal, where they accept or decline; their answer shows here.
+function InterpreterRequests({ contractors }) {
+  const blank = { contractor_id: '', language: '', school_district: '', location: '', appointment_date: '', start_time: '', end_time: '', notes: '' }
+  const [f, setF] = useState(blank)
+  const set = (k, v) => setF(p => ({ ...p, [k]: v }))
+  const [showAll, setShowAll] = useState(false)
+  const [requests, setRequests] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState(null)
+  const [confirm, setConfirm] = useState(null)   // { kind: 'send' } | { kind: 'cancel', r }
+  const [chip, setChip] = useState('open')
+
+  async function load() {
+    const { data, error } = await supabase.from('interpreter_requests')
+      .select('*, Contractors(identifier, name, email, user_id, field)')
+      .order('appointment_date', { ascending: false }).order('id', { ascending: false })
+    if (error) setMsg({ kind: 'danger', text: error.message })
+    setRequests(data || []); setLoading(false)
+  }
+  useEffect(() => { load() }, [])
+
+  const roster = contractors.filter(k => k.active !== false && (showAll || isInterpreter(k)))
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+  const chosen = contractors.find(k => String(k.identifier) === String(f.contractor_id))
+  const whenText = r => `${fmtDate(r.appointment_date)}${r.start_time ? ` · ${fmtTime(r.start_time)}` : ''}${r.end_time ? ` – ${fmtTime(r.end_time)}` : ''}`
+
+  function validate() {
+    if (!f.contractor_id) return 'Choose a translator or interpreter.'
+    if (!f.school_district.trim() && !f.location.trim()) return 'Enter the school district or location.'
+    if (!f.appointment_date) return 'Pick the appointment date.'
+    if (!f.start_time) return 'Pick the appointment time.'
+    return null
+  }
+
+  async function send() {
+    const err = validate()
+    if (err) { setMsg({ kind: 'warn', text: err }); setConfirm(null); return }
+    setBusy(true); setMsg(null)
+    const row = {
+      contractor_id: Number(f.contractor_id), language: f.language || null,
+      school_district: f.school_district.trim() || null, location: f.location.trim() || null,
+      appointment_date: f.appointment_date, start_time: f.start_time || null, end_time: f.end_time || null,
+      notes: f.notes.trim() || null, status: 'sent',
+    }
+    const { data: req, error } = await supabase.from('interpreter_requests').insert(row).select('id').single()
+    if (error) { setMsg({ kind: 'danger', text: error.message }); setBusy(false); setConfirm(null); return }
+    // The notice the translator sees in their portal (they accept / decline from there).
+    const where = [row.school_district, row.location].filter(Boolean).join(' — ')
+    await supabase.from('contractor_notifications').insert({
+      contractor_id: row.contractor_id, kind: 'interpreter_request',
+      title: `Interpreting request — ${row.school_district || row.location || 'appointment'} on ${fmtDate(row.appointment_date)}`,
+      body: `${whenText(row)}${where ? ` at ${where}` : ''}${row.language ? ` (${row.language})` : ''}. Please accept or decline this request under Interpreting Requests.`,
+      details: { request_id: req.id },
+    })
+    setF(blank); setConfirm(null)
+    setMsg({ kind: 'success', text: `Request sent to ${chosen?.name || 'the translator'} — it's waiting for their response.${chosen?.user_id ? '' : ' Note: they have no portal login yet, so they won’t see it until one is set up (Contractors page → Invite).'}` })
+    await load(); setBusy(false)
+  }
+
+  async function cancel(r) {
+    setBusy(true); setMsg(null)
+    const { error } = await supabase.from('interpreter_requests').update({ status: 'cancelled' }).eq('id', r.id)
+    if (error) setMsg({ kind: 'danger', text: error.message })
+    else {
+      await supabase.from('contractor_notifications').insert({
+        contractor_id: r.contractor_id, kind: 'interpreter_request',
+        title: `Request cancelled — ${r.school_district || r.location || 'appointment'} on ${fmtDate(r.appointment_date)}`,
+        body: `The office has cancelled this interpreting request (${whenText(r)}). No action is needed.`,
+        details: { request_id: r.id },
+      })
+      setMsg({ kind: 'info', text: `Request cancelled — ${r.Contractors?.name || 'the translator'} has been notified.` })
+    }
+    setConfirm(null); await load(); setBusy(false)
+  }
+
+  async function remove(r) {
+    if (!window.confirm(`Delete this ${r.status} request for ${r.Contractors?.name || 'the translator'} on ${fmtDate(r.appointment_date)}? This cannot be undone.`)) return
+    setBusy(true); setMsg(null)
+    const { error } = await supabase.from('interpreter_requests').delete().eq('id', r.id)
+    if (error) setMsg({ kind: 'danger', text: error.message })
+    await load(); setBusy(false)
+  }
+
+  const statusBadge = r => {
+    if (r.status === 'accepted') return <span className="badge-s s-completed">✓ Accepted</span>
+    if (r.status === 'declined') return <span className="badge-s s-overdue">✕ Declined</span>
+    if (r.status === 'cancelled') return <span className="badge-s s-pending">Cancelled</span>
+    const d = Math.max(0, Math.floor((Date.now() - new Date(r.sent_at).getTime()) / 86400000))
+    return <span className="badge-s s-scheduled">Awaiting response · {d}d</span>
+  }
+  const counts = { open: requests.filter(r => r.status === 'sent').length, accepted: requests.filter(r => r.status === 'accepted').length, declined: requests.filter(r => r.status === 'declined').length }
+  const rows = requests.filter(r => chip === 'all' || (chip === 'open' ? r.status === 'sent' : r.status === chip))
+
+  return (
+    <>
+      {msg && <div className={`alert alert-${msg.kind}`}>{msg.text}</div>}
+      <div className="grid-2" style={{ alignItems: 'start' }}>
+        <div className="card" style={{ border: '2px solid var(--accent)' }}>
+          <div className="card-title">🗓 New Appointment Request</div>
+          <div className="form-group">
+            <label>Translator / Interpreter *</label>
+            <select value={f.contractor_id} onChange={e => set('contractor_id', e.target.value)}>
+              <option value="">Select…</option>
+              {roster.map(k => <option key={k.identifier} value={k.identifier}>{k.name}{k.field ? ` — ${k.field}` : ''}{[k.language, k.language_2].filter(Boolean).length ? ` · ${[k.language, k.language_2].filter(Boolean).join(', ')}` : ''}{k.user_id ? '' : ' (no portal login)'}</option>)}
+            </select>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, textTransform: 'none', letterSpacing: 0, fontWeight: 400, marginTop: 6, cursor: 'pointer' }}>
+              <input type="checkbox" checked={showAll} onChange={e => setShowAll(e.target.checked)} /> Show all contractors, not just translators / interpreters
+            </label>
+          </div>
+          <div className="form-row">
+            <div className="form-group"><label>Language</label>
+              <select value={f.language} onChange={e => set('language', e.target.value)}>
+                <option value="">—</option>
+                {LANGUAGES.map(l => <option key={l} value={l}>{l}</option>)}
+              </select>
+            </div>
+            <div className="form-group"><label>School District</label><input value={f.school_district} onChange={e => set('school_district', e.target.value)} placeholder="e.g. Edison Township" /></div>
+          </div>
+          <div className="form-group"><label>Location / Address</label><input value={f.location} onChange={e => set('location', e.target.value)} placeholder="School name, address, or “virtual”" /></div>
+          <div className="form-row-3">
+            <div className="form-group"><label>Date *</label><input type="date" value={f.appointment_date} onChange={e => set('appointment_date', e.target.value)} /></div>
+            <div className="form-group"><label>Start Time *</label><input type="time" value={f.start_time} onChange={e => set('start_time', e.target.value)} /></div>
+            <div className="form-group"><label>End Time</label><input type="time" value={f.end_time} onChange={e => set('end_time', e.target.value)} /></div>
+          </div>
+          <div className="form-group"><label>Notes for the translator</label><textarea rows={2} value={f.notes} onChange={e => set('notes', e.target.value)} placeholder="Meeting type, who to ask for, parking, etc." /></div>
+          <button className="btn btn-primary" disabled={busy} onClick={() => { const err = validate(); if (err) setMsg({ kind: 'warn', text: err }); else { setMsg(null); setConfirm({ kind: 'send' }) } }}>📨 Send request</button>
+          <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 8 }}>The translator gets a notice in their portal and must accept or decline. Their answer shows in the list.</div>
+        </div>
+
+        <div className="card">
+          <div className="sec-head">
+            <h3>Requests</h3>
+            <div className="filter-bar" style={{ margin: 0 }}>
+              {[['open', `Awaiting (${counts.open})`], ['accepted', `Accepted (${counts.accepted})`], ['declined', `Declined (${counts.declined})`], ['all', 'All']].map(([id, label]) => (
+                <span key={id} className={`filter-chip ${chip === id ? 'active' : ''}`} onClick={() => setChip(id)}>{label}</span>
+              ))}
+            </div>
+          </div>
+          <div className="tbl-wrap">
+            <table>
+              <thead><tr><th>Translator</th><th>Where</th><th>When</th><th>Status</th><th></th></tr></thead>
+              <tbody>
+                {loading && <tr><td colSpan={5} style={{ color: '#888' }}>Loading…</td></tr>}
+                {!loading && rows.length === 0 && <tr><td colSpan={5} style={{ color: '#888' }}>{requests.length === 0 ? 'No requests yet — send one with the form.' : 'Nothing in this view.'}</td></tr>}
+                {rows.map(r => (
+                  <tr key={r.id}>
+                    <td style={{ fontWeight: 600 }}>{r.Contractors?.name || '—'}{r.language && <div style={{ fontWeight: 400, fontSize: 11, color: '#888' }}>{r.language}</div>}</td>
+                    <td>{r.school_district || '—'}{r.location && <div style={{ fontSize: 11, color: '#888' }}>{r.location}</div>}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}>{whenText(r)}<div style={{ fontSize: 11, color: '#888' }}>sent {fmtDate(receivedISO(r.sent_at))}</div></td>
+                    <td>
+                      {statusBadge(r)}
+                      {r.status === 'declined' && r.decline_reason && <div style={{ fontSize: 11, color: '#888', marginTop: 3 }}>“{r.decline_reason}”</div>}
+                      {r.responded_at && r.status !== 'sent' && <div style={{ fontSize: 11, color: '#888', marginTop: 3 }}>{fmtDate(receivedISO(r.responded_at))}</div>}
+                    </td>
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      {(r.status === 'sent' || r.status === 'accepted') && <button className="btn btn-ghost btn-sm" disabled={busy} title="Cancel this request (the translator is notified)" onClick={() => setConfirm({ kind: 'cancel', r })}>Cancel</button>}
+                      {(r.status === 'declined' || r.status === 'cancelled') && <button className="btn btn-danger-outline btn-sm" disabled={busy} title="Delete this request" onClick={() => remove(r)}>🗑</button>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {confirm && (
+        <div onClick={() => { if (!busy) setConfirm(null) }}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.45)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
+          <div className="card" role="dialog" aria-modal="true" onClick={e => e.stopPropagation()} style={{ maxWidth: 440, width: '100%', boxShadow: '0 12px 40px rgba(0,0,0,.3)' }}>
+            {confirm.kind === 'send' ? (
+              <>
+                <div className="card-title" style={{ fontSize: 16 }}>📨 Send this request?</div>
+                <div style={{ fontSize: 13, color: '#444', marginBottom: 12, lineHeight: 1.5 }}>
+                  <strong>{chosen?.name}</strong> will get a notice in their portal asking them to accept or decline:<br />
+                  <strong>{fmtDate(f.appointment_date)}</strong>{f.start_time ? ` · ${fmtTime(f.start_time)}` : ''}{f.end_time ? ` – ${fmtTime(f.end_time)}` : ''}
+                  {(f.school_district || f.location) && <> at <strong>{[f.school_district, f.location].filter(Boolean).join(' — ')}</strong></>}
+                  {f.language && <> ({f.language})</>}.
+                  {!chosen?.user_id && <div style={{ color: 'var(--yellow)', marginTop: 6 }}>⚠ This person has no portal login yet, so they won’t see the request until one is set up.</div>}
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                  <button className="btn btn-ghost" disabled={busy} onClick={() => setConfirm(null)}>No, go back</button>
+                  <button className="btn btn-primary" disabled={busy} onClick={send}>{busy ? 'Sending…' : 'Yes, send'}</button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="card-title" style={{ fontSize: 16 }}>Cancel this request?</div>
+                <div style={{ fontSize: 13, color: '#444', marginBottom: 12 }}>
+                  <strong>{confirm.r.Contractors?.name}</strong> — {whenText(confirm.r)}. They will be notified that it was cancelled.
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                  <button className="btn btn-ghost" disabled={busy} onClick={() => setConfirm(null)}>No, go back</button>
+                  <button className="btn btn-danger" disabled={busy} onClick={() => cancel(confirm.r)}>{busy ? 'Cancelling…' : 'Yes, cancel it'}</button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
