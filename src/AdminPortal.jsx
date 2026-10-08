@@ -3569,8 +3569,10 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
           </div>
         </div>
 
+        {/* The review box stays pinned while the report list scrolls (it scrolls inside itself if taller than the window). */}
+        <div style={{ alignSelf: 'stretch' }}>
         {selected && form ? (
-          <div className="card" style={{ border: '2px solid var(--accent)' }}>
+          <div className="card" style={{ border: '2px solid var(--accent)', position: 'sticky', top: 0, maxHeight: 'calc(100vh - 90px)', overflowY: 'auto' }}>
             <div className="card-title">
               🔍 Review — {selected.Cases?.case_number} · {selected.eval_type} · {selected.Contractors?.name}
             </div>
@@ -3640,8 +3642,9 @@ function QaQueue({ assignments, qaByAssignment, earnings, onChanged }) {
             )}
           </div>
         ) : (
-          <div className="card" style={{ color: '#888' }}>Select a submitted report on the left to review it.</div>
+          <div className="card" style={{ color: '#888', position: 'sticky', top: 0 }}>Select a submitted report on the left to review it.</div>
         )}
+        </div>
       </div>
     </>
   )
