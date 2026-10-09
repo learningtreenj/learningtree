@@ -2151,8 +2151,18 @@ function ContractorList({ contractors, assignments, onChanged, languageFilter = 
     return m
   }, [assignments])
 
+  // Language filter: the dropdown here, or a language clicked on the Dashboard.
+  const [langSel, setLangSel] = useState('')
+  const activeLang = langSel || languageFilter || ''
+  const langOptions = useMemo(() => {
+    const m = new Map()
+    for (const k of contractors) for (const l of contractorLanguages(k)) m.set(l, (m.get(l) || 0) + 1)
+    return [...m.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+  }, [contractors])
+  const pickLang = v => { setLangSel(v); if (languageFilter && onClearLanguageFilter) onClearLanguageFilter() }
+
   const rows = contractors
-    .filter(k => !languageFilter || contractorSpeaks(k, languageFilter))
+    .filter(k => !activeLang || contractorSpeaks(k, activeLang))
     .filter(k =>
       `${k.name || ''} ${k.email || ''} ${k.field || ''} ${k.language || ''} ${k.language_2 || ''} ${k.county || ''}`.toLowerCase().includes(q.toLowerCase()))
 
@@ -2220,15 +2230,20 @@ function ContractorList({ contractors, assignments, onChanged, languageFilter = 
         <h3>{rows.length} contractor{rows.length === 1 ? '' : 's'}</h3>
         <div className="filter-bar" style={{ margin: 0, display: 'flex', gap: 8, alignItems: 'center' }}>
           <input type="text" placeholder="🔍 Name, field, language, county…" value={q} onChange={e => setQ(e.target.value)} />
+          <select value={activeLang} onChange={e => pickLang(e.target.value)} title="Show only contractors who speak this language">
+            <option value="">All languages</option>
+            {langOptions.map(([l, n]) => <option key={l} value={l}>{l} ({n})</option>)}
+            {activeLang && !langOptions.some(([l]) => l === activeLang) && <option value={activeLang}>{activeLang}</option>}
+          </select>
           <button className="btn btn-primary btn-sm" onClick={startCreate}>➕ New Contractor</button>
         </div>
       </div>
-      {languageFilter && (
+      {activeLang && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, fontSize: 13 }}>
           <span style={{ color: '#555' }}>Showing contractors who speak</span>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#E6F1FB', color: '#185FA5', border: '1px solid #b9d6f2', borderRadius: 999, padding: '3px 10px', fontWeight: 600 }}>
-            {languageFilter}
-            <span style={{ cursor: 'pointer' }} title="Clear filter" onClick={() => onClearLanguageFilter && onClearLanguageFilter()}>✕</span>
+            {activeLang}
+            <span style={{ cursor: 'pointer' }} title="Clear filter" onClick={() => pickLang('')}>✕</span>
           </span>
         </div>
       )}
