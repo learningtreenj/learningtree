@@ -1177,17 +1177,18 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
   }, [openMenu])
 
   // Non-eval columns keep the sort/filter menus. Eval types are their own fixed columns.
-  const LEFT_COLS = [['case_number', 'Case #'], ['Student_name', 'Student'], ['School_district', 'District']]
+  const LEFT_COLS = [['case_number', 'Case #'], ['Student_name', 'Student'], ['Language', 'Language'], ['School_district', 'District']]
   const RIGHT_COLS = [['created_date', 'Date Added'], ['Report_Due_date', 'Due Date'], ['status', 'Status'], ['mail_date', 'Mail Date']]
-  const CHECKBOX_COLS = { School_district: true, status: true }
+  const CHECKBOX_COLS = { School_district: true, Language: true, status: true }
   const districtOptions = useMemo(() => [...new Set(cases.map(c => (c.School_district || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [cases])
+  const languageOptions = useMemo(() => [...new Set(cases.map(c => (c.Language || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [cases])
   // Case-level status is now just In Progress / Complete (Complete = all reports received).
   const caseProgressText = (c, asg) => {
     const lbl = caseStatusLabel(c, asg)
     return (lbl === 'Report Received' || lbl === 'Complete') ? 'Complete' : 'In Progress'
   }
   const statusOptions = ['In Progress', 'Complete']
-  const optionsFor = key => key === 'School_district' ? districtOptions : statusOptions
+  const optionsFor = key => key === 'School_district' ? districtOptions : key === 'Language' ? languageOptions : statusOptions
   // Contents of one eval-type cell for a case: matching assignments + the requested token.
   const cellFor = (c, col) => {
     const asg = (byCase[c.id] || []).filter(a => evalCol(a.eval_type) === col)
@@ -1220,6 +1221,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
       case 'mail_date': return c.mail_date || ''
       case 'case_number': return String(c.case_number ?? '').toLowerCase()
       case 'Student_name': return String(c.Student_name ?? '').toLowerCase()
+      case 'Language': return String(c.Language ?? '').toLowerCase()
       case 'School_district': return String(c.School_district ?? '').toLowerCase()
       case 'evaluation_type': return String(c.evaluation_type ?? '').toLowerCase()
       default: return ''
@@ -1253,6 +1255,8 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
   }
   const distSel = colChecks.School_district || []
   if (distSel.length) rows = rows.filter(c => distSel.includes((c.School_district || '').trim()))
+  const langSel = colChecks.Language || []
+  if (langSel.length) rows = rows.filter(c => langSel.includes((c.Language || '').trim()))
   const statusSel = colChecks.status || []
   if (statusSel.length) rows = rows.filter(c => statusSel.includes(caseProgressText(c, byCase[c.id] || [])))
   if (sortCol) {
@@ -1384,6 +1388,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
                 <tr key={c.id} style={rowStyle} title={rowTitle}>
                   <td><span className="tbl-link" onClick={() => onOpen(c)}>{c.case_number || c.id}</span></td>
                   <td><span className="tbl-link" onClick={() => onOpen(c)}>{c.Student_name || '—'}</span></td>
+                  <td>{c.Language || '—'}</td>
                   <td>{c.School_district || '—'}</td>
                   {EVAL_COLS.map(col => {
                     const { asg: cAsg, token } = cellFor(c, col)
