@@ -43,24 +43,41 @@ const CAT = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '
 
 export default function DistrictHeatmap({ cases = [], assignments = [] }) {
   const [view, setView] = useState('grid')
+  const [langView, setLangView] = useState('grid')
+  const [lang, setLang] = useState('')            // '' = all languages (dominant per district)
+  const [showAllD, setShowAllD] = useState(false)
+  const [showAllL, setShowAllL] = useState(false)
 
-  const { districts, languages, total, unmapped, completeIds } = useMemo(() => {
-    const dc = new Map(), lc = new Map(), completeIds = new Set()
+  const { districts, languages, total, unmapped, completeIds, distLang } = useMemo(() => {
+    const dc = new Map(), lc = new Map(), dl = new Map(), completeIds = new Set()
     for (const c of cases) {
       if (c.sent_to_district_at) completeIds.add(c.id)
       const d = (c.School_district || '').trim()
       if (d) dc.set(d, (dc.get(d) || 0) + 1)
       const l = (c.Language || '').trim()
       if (l) lc.set(l, (lc.get(l) || 0) + 1)
+      if (d && l) { const m = dl.get(d) || new Map(); m.set(l, (m.get(l) || 0) + 1); dl.set(d, m) }
     }
     const districts = [...dc.entries()].map(([name, n]) => ({ name, n })).sort((a, b) => b.n - a.n || a.name.localeCompare(b.name))
     const languages = [...lc.entries()].map(([name, n]) => ({ name, n })).sort((a, b) => b.n - a.n || a.name.localeCompare(b.name))
     const unmapped = districts.filter(d => !coordsFor(d.name))
-    return { districts, languages, total: cases.length, unmapped, completeIds }
+    return { districts, languages, total: cases.length, unmapped, completeIds, distLang: dl }
   }, [cases])
 
   const dMax = districts[0]?.n || 1
   const lMax = languages[0]?.n || 1
+
+  // Stable color per language (by overall rank) for the language map/grid.
+  const langColor = useMemo(() => { const m = new Map(); languages.forEach((l, i) => m.set(l.name, CAT[i % CAT.length])); return m }, [languages])
+  // Per-district language breakdown; `n` is the count for the chosen language (or all).
+  const langRows = useMemo(() => districts.map(d => {
+    const m = distLang.get(d.name) || new Map()
+    const list = [...m.entries()].map(([name, n]) => ({ name, n })).sort((a, b) => b.n - a.n || a.name.localeCompare(b.name))
+    return { name: d.name, total: d.n, list, top: list[0] || null, n: lang ? (m.get(lang) || 0) : d.n }
+  }).filter(r => r.n > 0).sort((a, b) => b.n - a.n || a.name.localeCompare(b.name)), [districts, distLang, lang])
+  const lrMax = langRows[0]?.n || 1
+  const langUnmapped = langRows.filter(r => !coordsFor(r.name))
+  const dot = color => <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: '50%', background: color, marginRight: 5, verticalAlign: 'middle' }} />
 
   const bar = (name, n, max, color) => (
     <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
@@ -141,17 +158,114 @@ export default function DistrictHeatmap({ cases = [], assignments = [] }) {
         <ContractorSnapshot assignments={assignments} completeIds={completeIds} />
       </div>
 
+      {/* ── Full-width: language need by district ── */}
+      <div className="card" style={{ marginBottom: 14 }}>
+        <div className="card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 8 }}>
+          <span>Languages by District{lang ? ` — ${lang}` : ''}</span>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', fontWeight: 400, flexWrap: 'wrap' }}>
+            <select value={lang} onChange={e => setLang(e.target.value)} style={{ padding: '4px 8px', fontSize: 13, border: '1px solid var(--border)', borderRadius: 5, background: '#fff' }} title="Pick a language to see where its cases are">
+              <option value="">All languages (top language per district)</option>
+              {languages.map(l => <option key={l.name} value={l.name}>{l.name} ({l.n})</option>)}
+            </select>
+            <div style={{ display: 'flex', gap: 4 }}>
+              <button className={`btn btn-sm ${langView === 'grid' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setLangView('grid')}>▦ Grid</button>
+              <button className={`btn btn-sm ${langView === 'map' ? 'btn-primary' : 'btn-ghost'}`} onClick={() => setLangView('map')}>🗺 Map</button>
+            </div>
+          </div>
+        </div>
+        <div style={{ fontSize: 12, color: '#777', marginBottom: 10 }}>
+          {lang
+            ? <>Cases in <strong>{lang}</strong> by district — {langRows.reduce((n, r) => n + r.n, 0)} case{langRows.reduce((n, r) => n + r.n, 0) === 1 ? '' : 's'} across {langRows.length} district{langRows.length === 1 ? '' : 's'}.</>
+            : <>Each district's languages, most-requested first. Pick a language above to map just that one.</>}
+        </div>
+
+        {langRows.length === 0 && <div style={{ color: '#888', fontSize: 13 }}>No cases{lang ? ` in ${lang}` : ''} with a district yet.</div>}
+
+        {langRows.length > 0 && langView === 'grid' && (lang ? (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(96px, 1fr))', gap: 7 }}>
+            {langRows.map(r => (
+              <div key={r.name} style={{ background: fillFor(r.n, lrMax), color: inkFor(r.n, lrMax), borderRadius: 8, padding: '10px 10px 12px' }}>
+                <div style={{ fontSize: 12, fontWeight: 600, lineHeight: 1.2 }}>{r.name}</div>
+                <div style={{ fontSize: 20, fontWeight: 600, marginTop: 4 }}>{r.n}</div>
+                <div style={{ fontSize: 11, opacity: .85 }}>of {r.total} case{r.total === 1 ? '' : 's'}</div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: 8 }}>
+            {langRows.map(r => (
+              <div key={r.name} style={{ border: '1px solid var(--border)', borderLeft: `5px solid ${langColor.get(r.top?.name) || '#999'}`, borderRadius: 8, padding: '8px 10px', background: '#fff' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, fontSize: 12, fontWeight: 700, lineHeight: 1.2 }}>
+                  <span>{r.name}</span><span style={{ color: '#888', fontWeight: 600 }}>{r.total}</span>
+                </div>
+                <div style={{ marginTop: 5, fontSize: 12 }}>
+                  {r.list.slice(0, 3).map(l => (
+                    <div key={l.name} style={{ display: 'flex', justifyContent: 'space-between', gap: 6, lineHeight: 1.6 }}>
+                      <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{dot(langColor.get(l.name))}{l.name}</span><span style={{ fontWeight: 600 }}>{l.n}</span>
+                    </div>
+                  ))}
+                  {r.list.length > 3 && <div style={{ color: '#888', fontSize: 11 }}>+{r.list.length - 3} more</div>}
+                </div>
+              </div>
+            ))}
+          </div>
+        ))}
+
+        {langRows.length > 0 && langView === 'map' && (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+            <svg viewBox={`0 0 ${MAP_W} ${MAP_H}`} width="100%" style={{ maxWidth: MAP_W, height: 'auto' }} role="img" aria-label={lang ? `New Jersey map of ${lang} cases by district` : 'New Jersey map of the top language per district'}>
+              <path d={NJ_PATH} fill="var(--gray-bg, #f1efe8)" stroke="var(--border, #d3d1c7)" strokeWidth="1" />
+              {langRows.map(r => {
+                const co = coordsFor(r.name); if (!co) return null
+                const [x, y] = project(co[0], co[1])
+                const rad = 5 + Math.sqrt(r.n) * 5.5
+                const color = lang ? (langColor.get(lang) || TILE_DARK) : (langColor.get(r.top?.name) || '#999')
+                return (
+                  <g key={r.name}>
+                    <title>{r.name}: {lang ? `${r.n} ${lang} case${r.n === 1 ? '' : 's'}` : r.list.slice(0, 4).map(l => `${l.name} ${l.n}`).join(', ')}</title>
+                    <circle cx={x} cy={y} r={rad} fill={color} fillOpacity="0.9" stroke="#fff" strokeWidth="1.2" />
+                    <text x={x} y={y} dy="0.35em" textAnchor="middle" fontSize="11" fontWeight="600" fill="#fff">{r.n}</text>
+                  </g>
+                )
+              })}
+            </svg>
+            {!lang && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px', justifyContent: 'center', fontSize: 12, color: '#555', marginTop: 6 }}>
+                {languages.slice(0, 8).map(l => <span key={l.name}>{dot(langColor.get(l.name))}{l.name}</span>)}
+                {languages.length > 8 && <span style={{ color: '#888' }}>+{languages.length - 8} more</span>}
+                <span style={{ color: '#888' }}>· color = district's most-requested language · size = {lang ? 'cases' : 'total cases'}</span>
+              </div>
+            )}
+            {langUnmapped.length > 0 && (
+              <div style={{ fontSize: 12, color: '#888', marginTop: 4, textAlign: 'center' }}>
+                Not shown on map (no location on file): {langUnmapped.map(r => `${r.name} (${r.n})`).join(', ')}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* ── Full-width: top-5 rankings ── */}
       <div className="card" style={{ marginBottom: 14 }}>
         <div className="grid-2" style={{ alignItems: 'start' }}>
           <div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: '#555', marginBottom: 10 }}>Top 5 districts by volume</div>
-            {districts.slice(0, 5).map(d => bar(d.name, d.n, dMax, TILE_DARK))}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#555' }}>{showAllD ? `All ${districts.length} districts by volume` : 'Top 5 districts by volume'}</span>
+              {districts.length > 5 && <span className="tbl-link" style={{ fontSize: 12 }} onClick={() => setShowAllD(v => !v)}>{showAllD ? 'Show top 5' : `Show all ${districts.length}`}</span>}
+            </div>
+            <div style={showAllD ? { maxHeight: 420, overflowY: 'auto', paddingRight: 4 } : undefined}>
+              {(showAllD ? districts : districts.slice(0, 5)).map(d => bar(d.name, d.n, dMax, TILE_DARK))}
+            </div>
             {districts.length === 0 && <div style={{ color: '#888', fontSize: 13 }}>No district data yet.</div>}
           </div>
           <div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: '#555', marginBottom: 10 }}>Top 5 languages by volume</div>
-            {languages.slice(0, 5).map(l => bar(l.name, l.n, lMax, '#1baf7a'))}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 10 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#555' }}>{showAllL ? `All ${languages.length} languages by volume` : 'Top 5 languages by volume'}</span>
+              {languages.length > 5 && <span className="tbl-link" style={{ fontSize: 12 }} onClick={() => setShowAllL(v => !v)}>{showAllL ? 'Show top 5' : `Show all ${languages.length}`}</span>}
+            </div>
+            <div style={showAllL ? { maxHeight: 420, overflowY: 'auto', paddingRight: 4 } : undefined}>
+              {(showAllL ? languages : languages.slice(0, 5)).map(l => bar(l.name, l.n, lMax, '#1baf7a'))}
+            </div>
             {languages.length === 0 && <div style={{ color: '#888', fontSize: 13 }}>No language data yet.</div>}
           </div>
         </div>
