@@ -79,6 +79,26 @@ export default function DistrictHeatmap({ cases = [], assignments = [] }) {
   const langUnmapped = langRows.filter(r => !coordsFor(r.name))
   const dot = color => <span style={{ display: 'inline-block', width: 9, height: 9, borderRadius: '50%', background: color, marginRight: 5, verticalAlign: 'middle' }} />
 
+  // "All languages" grid = a district × language heat table (top languages as columns, rest in "Other").
+  const [showAllRows, setShowAllRows] = useState(false)
+  const [rowQuery, setRowQuery] = useState('')
+  const MATRIX_LANGS = 8, MATRIX_ROWS = 15
+  const matrixLangs = languages.slice(0, MATRIX_LANGS).map(l => l.name)
+  const matrixRows = useMemo(() => {
+    const q = rowQuery.trim().toLowerCase()
+    return districts
+      .filter(d => !q || d.name.toLowerCase().includes(q))
+      .map(d => {
+        const m = distLang.get(d.name) || new Map()
+        const cells = matrixLangs.map(l => m.get(l) || 0)
+        const other = [...m.entries()].filter(([l]) => !matrixLangs.includes(l)).reduce((n, [, v]) => n + v, 0)
+        return { name: d.name, total: d.n, cells, other }
+      })
+  }, [districts, distLang, rowQuery, languages])
+  const matrixShown = showAllRows || rowQuery.trim() ? matrixRows : matrixRows.slice(0, MATRIX_ROWS)
+  const matrixMax = Math.max(1, ...matrixRows.flatMap(r => [...r.cells, r.other]))
+  const heat = (v, color) => v ? { background: `${color}${Math.round((0.18 + 0.72 * Math.sqrt(v / matrixMax)) * 255).toString(16).padStart(2, '0')}`, color: v / matrixMax >= 0.45 ? '#fff' : '#1c2330', fontWeight: 700 } : { color: '#c9ccd1' }
+
   const bar = (name, n, max, color) => (
     <div key={name} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
       <span style={{ flex: '0 0 120px', fontSize: 13, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }} title={name}>{name}</span>
@@ -192,23 +212,51 @@ export default function DistrictHeatmap({ cases = [], assignments = [] }) {
             ))}
           </div>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(170px, 1fr))', gap: 8 }}>
-            {langRows.map(r => (
-              <div key={r.name} style={{ border: '1px solid var(--border)', borderLeft: `5px solid ${langColor.get(r.top?.name) || '#999'}`, borderRadius: 8, padding: '8px 10px', background: '#fff' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, fontSize: 12, fontWeight: 700, lineHeight: 1.2 }}>
-                  <span>{r.name}</span><span style={{ color: '#888', fontWeight: 600 }}>{r.total}</span>
-                </div>
-                <div style={{ marginTop: 5, fontSize: 12 }}>
-                  {r.list.slice(0, 3).map(l => (
-                    <div key={l.name} style={{ display: 'flex', justifyContent: 'space-between', gap: 6, lineHeight: 1.6 }}>
-                      <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{dot(langColor.get(l.name))}{l.name}</span><span style={{ fontWeight: 600 }}>{l.n}</span>
-                    </div>
+          <>
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+              <input type="text" value={rowQuery} onChange={e => setRowQuery(e.target.value)} placeholder="🔍 Find a district…"
+                style={{ padding: '5px 9px', fontSize: 13, border: '1px solid var(--border)', borderRadius: 5, width: 200 }} />
+              <span style={{ fontSize: 12, color: '#777' }}>
+                Showing {matrixShown.length} of {matrixRows.length} districts · darker = more cases · the {matrixLangs.length} most-requested languages are columns, everything else is “Other”
+              </span>
+            </div>
+            <div className="tbl-wrap" style={{ maxHeight: 520, overflow: 'auto' }}>
+              <table style={{ fontSize: 12.5 }}>
+                <thead>
+                  <tr>
+                    <th style={{ position: 'sticky', top: 0, left: 0, zIndex: 3, background: '#f0f2f5' }}>District</th>
+                    <th style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f0f2f5', textAlign: 'right' }}>Cases</th>
+                    {matrixLangs.map(l => <th key={l} style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f0f2f5', textAlign: 'center', whiteSpace: 'nowrap' }}>{dot(langColor.get(l))}{l}</th>)}
+                    <th style={{ position: 'sticky', top: 0, zIndex: 2, background: '#f0f2f5', textAlign: 'center' }}>Other</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {matrixShown.length === 0 && <tr><td colSpan={matrixLangs.length + 3} style={{ color: '#888' }}>No district matches.</td></tr>}
+                  {matrixShown.map(r => (
+                    <tr key={r.name}>
+                      <td style={{ position: 'sticky', left: 0, background: '#fff', fontWeight: 600, whiteSpace: 'nowrap' }}>{r.name}</td>
+                      <td style={{ textAlign: 'right', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>{r.total}</td>
+                      {r.cells.map((v, i) => <td key={i} style={{ textAlign: 'center', fontVariantNumeric: 'tabular-nums', ...heat(v, langColor.get(matrixLangs[i])) }}>{v || '·'}</td>)}
+                      <td style={{ textAlign: 'center', fontVariantNumeric: 'tabular-nums', ...heat(r.other, '#6b7480') }} title={r.other ? [...(distLang.get(r.name) || new Map()).entries()].filter(([l]) => !matrixLangs.includes(l)).map(([l, v]) => `${l} ${v}`).join(', ') : undefined}>{r.other || '·'}</td>
+                    </tr>
                   ))}
-                  {r.list.length > 3 && <div style={{ color: '#888', fontSize: 11 }}>+{r.list.length - 3} more</div>}
-                </div>
+                </tbody>
+                <tfoot>
+                  <tr style={{ fontWeight: 700, background: '#f0f2f5' }}>
+                    <td style={{ position: 'sticky', left: 0, background: '#f0f2f5' }}>All districts</td>
+                    <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{matrixRows.reduce((n, r) => n + r.total, 0)}</td>
+                    {matrixLangs.map((l, i) => <td key={l} style={{ textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>{matrixRows.reduce((n, r) => n + r.cells[i], 0)}</td>)}
+                    <td style={{ textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>{matrixRows.reduce((n, r) => n + r.other, 0)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+            {matrixRows.length > MATRIX_ROWS && !rowQuery.trim() && (
+              <div style={{ marginTop: 8 }}>
+                <span className="tbl-link" style={{ fontSize: 12 }} onClick={() => setShowAllRows(v => !v)}>{showAllRows ? 'Show top 15 districts' : `Show all ${matrixRows.length} districts`}</span>
               </div>
-            ))}
-          </div>
+            )}
+          </>
         ))}
 
         {langRows.length > 0 && langView === 'map' && (
