@@ -2765,7 +2765,7 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
     }
     setDateOverride(prev => { const n = { ...prev }; ids.forEach(id => { n[`e:${id}`] = date || '' }); return n })
     if (!date) setJustNotified(prev => { const n = new Set(prev); ids.forEach(id => n.delete(id)); return n })
-    setPicked(new Set())
+    // Keep the ticked rows selected so "Notify selected" can follow straight after "Mark selected paid".
     let note = ''
     if (date) {
       const idSet = new Set(ids)
@@ -2781,10 +2781,14 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
   // ── Notify evaluators, inside their portal, about lines that have been marked paid ──
   const [notifyOpen, setNotifyOpen] = useState(false)       // confirmation dialog
   const [justNotified, setJustNotified] = useState(new Set()) // line ids notified this session
-  // Paid lines in this payroll month that the evaluator hasn't been told about yet, per evaluator.
+  // Scope: if any rows are ticked, only those evaluators are notified; otherwise every
+  // paid-but-not-yet-announced line in the month. Lines that are unpaid or already
+  // announced are skipped either way.
+  const notifySelected = pickedVisible.length > 0
+  const notifyPool = notifySelected ? pickedVisible : monthLines
   const notifyGroups = (() => {
     const m = new Map()
-    for (const l of monthLines) {
+    for (const l of notifyPool) {
       const paid = paidOf(l.id)
       if (!paid || l.notified || justNotified.has(l.id)) continue
       const g = m.get(l.contractor_id) || {
@@ -2797,6 +2801,8 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
     return [...m.values()].sort((x, y) => x.evaluator.localeCompare(y.evaluator))
   })()
   const notifyLineCount = notifyGroups.reduce((n, g) => n + g.lines.length, 0)
+  // Ticked rows that won't get a notice (not paid, or already announced).
+  const notifySkipped = notifySelected ? pickedVisible.filter(l => !paidOf(l.id) || l.notified || justNotified.has(l.id)).length : 0
 
   async function sendPaidNotifications() {
     if (!notifyGroups.length) { setNotifyOpen(false); return }
@@ -2888,9 +2894,11 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
             <button className="btn btn-ghost btn-sm" disabled={busy} title="Undo — clears the paid date on the selected rows" onClick={() => setPaid(pickedVisible.filter(l => paidOf(l.id)).map(l => l.id), '')}>↩ Clear paid date</button>}
           <span style={{ flex: 1 }} />
           <button className="btn btn-secondary btn-sm" disabled={busy || notifyLineCount === 0}
-            title={notifyLineCount === 0 ? 'No paid evaluations in this month are waiting to be announced' : 'Post a "Payment sent" notice in the portal of each evaluator who has been marked paid'}
+            title={notifySelected
+              ? (notifyLineCount === 0 ? 'None of the ticked rows is a paid evaluation that still needs announcing' : 'Post a "Payment sent" notice only to the evaluators on the ticked rows')
+              : (notifyLineCount === 0 ? 'No paid evaluations in this month are waiting to be announced' : 'No rows ticked — this notifies every evaluator in the month with a paid evaluation not yet announced. Tick rows to notify just those.')}
             onClick={() => setNotifyOpen(true)}>
-            🔔 Notify paid evaluators ({notifyGroups.length})
+            🔔 {notifySelected ? `Notify selected (${notifyGroups.length} evaluator${notifyGroups.length === 1 ? '' : 's'})` : `Notify all paid (${notifyGroups.length} evaluator${notifyGroups.length === 1 ? '' : 's'})`}
           </button>
           {monthAllPaid && <button className="btn btn-secondary btn-sm" disabled={busy} onClick={archiveNow}>📦 {monthArchive ? 'Update archive' : 'Archive month'}</button>}
           <button className="btn btn-ghost btn-sm" disabled={monthLines.length === 0} onClick={() => exportPayrollToExcel(month, archiveRowsFor(month))}>⬇ Export to Excel</button>
@@ -3059,11 +3067,15 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
           style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.45)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
           <div className="card" role="dialog" aria-modal="true" aria-label="Notify evaluators?" onClick={e => e.stopPropagation()}
             style={{ maxWidth: 480, width: '100%', boxShadow: '0 12px 40px rgba(0,0,0,.3)' }}>
-            <div className="card-title" style={{ fontSize: 16 }}>🔔 Notify evaluators?</div>
+            <div className="card-title" style={{ fontSize: 16 }}>🔔 Notify {notifySelected ? 'selected' : 'all paid'} evaluators?</div>
             <div style={{ fontSize: 13, color: '#444', marginBottom: 10 }}>
-              This posts a <strong>“Payment sent”</strong> notice in the portal of{' '}
+              {notifySelected
+                ? <><strong>Only the evaluators on the rows you ticked</strong> will get a notice — </>
+                : <><strong>No rows are ticked</strong>, so every evaluator in {monthLabel(month)} with a paid, not-yet-announced evaluation will get a notice — </>}
+              a <strong>“Payment sent”</strong> notice in the portal of{' '}
               <strong>{notifyGroups.length} evaluator{notifyGroups.length === 1 ? '' : 's'}</strong> covering{' '}
-              <strong>{notifyLineCount} paid evaluation{notifyLineCount === 1 ? '' : 's'}</strong> for {monthLabel(month)}. No email is sent.
+              <strong>{notifyLineCount} paid evaluation{notifyLineCount === 1 ? '' : 's'}</strong>. No email is sent.
+              {notifySkipped > 0 && <div style={{ marginTop: 6, color: 'var(--yellow)' }}>⚠ {notifySkipped} ticked row{notifySkipped === 1 ? ' is' : 's are'} skipped — not marked paid, or already announced.</div>}
             </div>
             <div style={{ maxHeight: 220, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 10px', fontSize: 13, marginBottom: 14 }}>
               {notifyGroups.map(g => (
