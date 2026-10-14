@@ -818,7 +818,7 @@ function NewReferral({ onCreated }) {
         <div className="form-group">
           <label>Case #</label>
           <input value={f.case_number} onChange={e => set('case_number', e.target.value)} placeholder="Auto-assigned if left blank" />
-          <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>Leave blank to auto-number (next is 26-0450), or type one to override.</div>
+          <div style={{ fontSize: 12, color: '#888', marginTop: 4 }}>Leave blank to auto-number (the next unused number is picked for you), or type one to override.</div>
         </div>
         <div className="form-group"></div>
       </div>
