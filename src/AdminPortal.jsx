@@ -2890,8 +2890,16 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
             onClick={() => { if (window.confirm(`Mark all ${visibleUnpaid.length} unpaid evaluation${visibleUnpaid.length === 1 ? '' : 's'} shown as paid on ${fmtDate(payDate)}?`)) setPaid(visibleUnpaid.map(l => l.id), payDate) }}>
             ✓ Mark all unpaid as paid ({visibleUnpaid.length})
           </button>
-          {pickedVisible.some(l => paidOf(l.id)) &&
-            <button className="btn btn-ghost btn-sm" disabled={busy} title="Undo — clears the paid date on the selected rows" onClick={() => setPaid(pickedVisible.filter(l => paidOf(l.id)).map(l => l.id), '')}>↩ Clear paid date</button>}
+          {(() => {
+            const paidPicked = pickedVisible.filter(l => paidOf(l.id))
+            return (
+              <button className="btn btn-danger-outline btn-sm" disabled={busy || paidPicked.length === 0}
+                title={paidPicked.length === 0 ? 'Tick one or more paid rows to mark them unpaid again' : 'Removes the paid date from the ticked rows so they show as Unpaid (use this to correct a mistake)'}
+                onClick={() => { if (window.confirm(`Mark ${paidPicked.length} evaluation${paidPicked.length === 1 ? '' : 's'} as UNPAID? This removes the paid date${paidPicked.length === 1 ? '' : 's'} and they will count as owed again.`)) setPaid(paidPicked.map(l => l.id), '') }}>
+                ↩ Mark selected unpaid ({paidPicked.length})
+              </button>
+            )
+          })()}
           <span style={{ flex: 1 }} />
           <button className="btn btn-secondary btn-sm" disabled={busy || notifyLineCount === 0}
             title={notifySelected
