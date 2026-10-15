@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { supabase, fetchAll, STATUSES, fmtDate, daysLeft, dueColor, parseRate, toISODate } from './supabase.js'
 import { Shell, Badge, StatCard, Meta } from './ui.jsx'
 import { generateInvoiceDoc, RATE_PER_EVAL } from './invoice.js'
@@ -228,6 +228,27 @@ function payrollPeriodLabel(ym) {
   const start = new Date(y, m - 2, PAYROLL_CUTOFF_DAY + 1), end = new Date(y, m - 1, PAYROLL_CUTOFF_DAY)
   const f = (dt, withYear) => dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(withYear ? { year: 'numeric' } : {}) })
   return `${f(start, start.getFullYear() !== end.getFullYear())} – ${f(end, true)}`
+}
+
+// Inline date editor for table cells. The browser's date box fires "change" while a date is
+// still being typed, so we keep the value locally and only save on Enter or when focus
+// leaves the box; Escape cancels.
+function DateEdit({ value, onSave, onCancel, disabled, style }) {
+  const [v, setV] = useState(value || '')
+  const done = useRef(false)
+  const commit = () => { if (done.current) return; done.current = true; onSave(v) }
+  return (
+    <input type="date" autoFocus value={v} disabled={disabled}
+      onChange={e => setV(e.target.value)}
+      onClick={e => e.stopPropagation()}
+      onKeyDown={e => {
+        if (e.key === 'Enter') { e.preventDefault(); commit() }
+        if (e.key === 'Escape') { e.preventDefault(); done.current = true; onCancel() }
+      }}
+      onBlur={commit}
+      title="Type the date, then press Enter to save (Esc to cancel)"
+      style={{ padding: '2px 4px', fontSize: 12, ...(style || {}) }} />
+  )
 }
 
 // Whole days an assignment has been awaiting the contractor's acceptance
@@ -1414,22 +1435,16 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
                   <td style={{ whiteSpace: 'nowrap' }}>{c.created_date ? fmtDate(c.created_date) : <span style={{ color: 'var(--muted)' }}>—</span>}</td>
                   <td style={{ ...dueColor(c.Report_Due_date), whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
                     {editDueId === c.id
-                      ? <input type="date" autoFocus defaultValue={c.Report_Due_date ? String(c.Report_Due_date).slice(0, 10) : ''}
-                          disabled={rowBusy}
-                          onChange={e => saveDueDate(c, e.target.value)}
-                          onBlur={() => setEditDueId(null)}
-                          style={{ padding: '2px 4px', fontSize: 12 }} />
+                      ? <DateEdit value={c.Report_Due_date ? String(c.Report_Due_date).slice(0, 10) : ''} disabled={rowBusy}
+                          onSave={v => saveDueDate(c, v)} onCancel={() => setEditDueId(null)} />
                       : <span className="tbl-link" title="Click to edit due date" onClick={() => setEditDueId(c.id)}>{fmtDate(c.Report_Due_date) || 'Set date'}</span>}
                   </td>
                   <td><span className={`badge-s ${progress === 'Complete' ? 's-completed' : 's-drafting'}`}>{progress}</span></td>
                   <td style={{ whiteSpace: 'nowrap', padding: '6px 8px' }}
                     onClick={e => { if (editMailId !== c.id) mailCellClick(e, c, orderedMailIds) }}>
                     {editMailId === c.id ? (
-                      <input type="date" autoFocus defaultValue={mailVal(c)} disabled={rowBusy}
-                        onClick={e => e.stopPropagation()}
-                        onChange={e => { writeMailDates([c.id], e.target.value); setEditMailId(null) }}
-                        onBlur={() => setEditMailId(null)}
-                        style={{ padding: '2px 4px', fontSize: 12 }} />
+                      <DateEdit value={mailVal(c)} disabled={rowBusy}
+                        onSave={v => { setEditMailId(null); if (v !== mailVal(c)) writeMailDates([c.id], v) }} onCancel={() => setEditMailId(null)} />
                     ) : (
                       <span
                         onDoubleClick={e => { e.stopPropagation(); setEditMailId(c.id) }}
@@ -2620,11 +2635,8 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
 
   const dateCell = (key) => {
     if (editKey === key) {
-      return <input type="date" autoFocus defaultValue={cellVal(key)} disabled={busy}
-        onClick={e => e.stopPropagation()}
-        onChange={e => { writeDates([key], e.target.value); setEditKey(null) }}
-        onBlur={() => setEditKey(null)}
-        style={{ padding: '2px 4px', fontSize: 12 }} />
+      return <DateEdit value={cellVal(key)} disabled={busy}
+        onSave={v => { setEditKey(null); if (v !== cellVal(key)) writeDates([key], v) }} onCancel={() => setEditKey(null)} />
     }
     const v = cellVal(key); const isSel = sel.has(key); const isActive = active === key
     return (
@@ -2972,9 +2984,8 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
                     <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>${Number(l.amount || 0).toLocaleString()}</td>
                     <td style={{ whiteSpace: 'nowrap' }}>
                       {editRecvId === l.id ? (
-                        <input type="date" autoFocus defaultValue={l.received} disabled={busy}
-                          onChange={e => setReceivedDate(l, e.target.value)} onBlur={() => setEditRecvId(null)}
-                          style={{ padding: '2px 4px', fontSize: 12 }} />
+                        <DateEdit value={l.received} disabled={busy}
+                          onSave={v => setReceivedDate(l, v)} onCancel={() => setEditRecvId(null)} />
                       ) : (
                         <span className="tbl-link" onClick={() => setEditRecvId(l.id)}
                           title={`Click to change the date this report counts as received (moves it to that month's payroll).${l.adjusted ? ` Adjusted by the office — uploaded ${fmtDate(l.uploaded)}.` : ''}`}>
@@ -2984,9 +2995,8 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
                     </td>
                     <td style={{ whiteSpace: 'nowrap' }}>
                       {editPaidId === l.id ? (
-                        <input type="date" autoFocus defaultValue={paid || ''} disabled={busy}
-                          onChange={e => { setEditPaidId(null); if (e.target.value) setPaid([l.id], e.target.value) }} onBlur={() => setEditPaidId(null)}
-                          style={{ padding: '2px 4px', fontSize: 12 }} />
+                        <DateEdit value={paid || ''} disabled={busy}
+                          onSave={v => { setEditPaidId(null); if (v && v !== paid) setPaid([l.id], v) }} onCancel={() => setEditPaidId(null)} />
                       ) : (
                         <span style={{ cursor: 'pointer' }} onClick={() => setEditPaidId(l.id)} title="Click to set or change the paid date for this line">
                           {paid ? <span className="badge-s s-completed">Paid {fmtDate(paid)}</span> : <span className="badge-s s-pending">Unpaid</span>}
