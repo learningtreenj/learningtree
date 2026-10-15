@@ -2660,9 +2660,10 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
     .map(a => {
       const k = contractorById.get(a.contractor_id) || a.Contractors || {}
       const e = earningByAsg.get(a.id)
-      const received = receivedISO(a.submitted_at)
+      const uploaded = receivedISO(a.submitted_at)
+      const received = a.payroll_date ? String(a.payroll_date).slice(0, 10) : uploaded
       return {
-        id: a.id, month: payrollMonthOf(received), received, contractor_id: a.contractor_id,
+        id: a.id, month: payrollMonthOf(received), received, uploaded, adjusted: !!a.payroll_date, contractor_id: a.contractor_id,
         evaluator: k.name || '—', field: a.eval_type || '—',
         case_number: a.Cases?.case_number || '', student: a.Cases?.Student_name || '',
         method: k.preferred_payment_method || '',
@@ -2835,6 +2836,21 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
     onChanged(); setBusy(false)
   }
 
+  // Office corrections to a single line: the date it counts as received (moves it to that
+  // month's payroll) or its paid date.
+  const [editRecvId, setEditRecvId] = useState(null)
+  const [editPaidId, setEditPaidId] = useState(null)
+  async function setReceivedDate(l, val) {
+    setEditRecvId(null)
+    if ((val || '') === (l.adjusted ? l.received : '')) return
+    setBusy(true); setMsg(null)
+    const { error } = await supabase.from('Assignments').update({ payroll_date: val || null }).eq('id', l.id)
+    if (error) setMsg({ kind: 'danger', text: error.message })
+    else if (val) setMsg({ kind: 'success', text: `${l.evaluator} — ${l.student || l.case_number}: now counted as received ${fmtDate(val)}, so it sits in ${monthLabel(payrollMonthOf(val))} payroll.` })
+    else setMsg({ kind: 'info', text: `${l.evaluator} — ${l.student || l.case_number}: back to the upload date (${fmtDate(l.uploaded)}).` })
+    onChanged(); setBusy(false)
+  }
+
   async function setMethod(contractorId, method) {
     setBusy(true); setMsg(null)
     const { error } = await supabase.from('Contractors').update({ preferred_payment_method: method || null }).eq('identifier', contractorId)
@@ -2954,8 +2970,30 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
                       </select>
                     </td>
                     <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>${Number(l.amount || 0).toLocaleString()}</td>
-                    <td style={{ whiteSpace: 'nowrap' }}>{fmtDate(l.received)}</td>
-                    <td style={{ whiteSpace: 'nowrap' }}>{paid ? <span className="badge-s s-completed">Paid {fmtDate(paid)}</span> : <span className="badge-s s-pending">Unpaid</span>}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      {editRecvId === l.id ? (
+                        <input type="date" autoFocus defaultValue={l.received} disabled={busy}
+                          onChange={e => setReceivedDate(l, e.target.value)} onBlur={() => setEditRecvId(null)}
+                          style={{ padding: '2px 4px', fontSize: 12 }} />
+                      ) : (
+                        <span className="tbl-link" onClick={() => setEditRecvId(l.id)}
+                          title={`Click to change the date this report counts as received (moves it to that month's payroll).${l.adjusted ? ` Adjusted by the office — uploaded ${fmtDate(l.uploaded)}.` : ''}`}>
+                          {fmtDate(l.received)}{l.adjusted && <span style={{ color: 'var(--muted)', fontSize: 10, marginLeft: 4 }}>✎ adj.</span>}
+                        </span>
+                      )}
+                    </td>
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      {editPaidId === l.id ? (
+                        <input type="date" autoFocus defaultValue={paid || ''} disabled={busy}
+                          onChange={e => { setEditPaidId(null); if (e.target.value) setPaid([l.id], e.target.value) }} onBlur={() => setEditPaidId(null)}
+                          style={{ padding: '2px 4px', fontSize: 12 }} />
+                      ) : (
+                        <span style={{ cursor: 'pointer' }} onClick={() => setEditPaidId(l.id)} title="Click to set or change the paid date for this line">
+                          {paid ? <span className="badge-s s-completed">Paid {fmtDate(paid)}</span> : <span className="badge-s s-pending">Unpaid</span>}
+                          <span style={{ color: 'var(--muted)', fontSize: 10, marginLeft: 4 }}>✎</span>
+                        </span>
+                      )}
+                    </td>
                   </tr>
                   </Fragment>
                 )
