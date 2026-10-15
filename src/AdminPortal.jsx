@@ -1585,6 +1585,19 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, qaByAss
     setBusy(false)
   }
 
+  // Correct an evaluator's evaluation type (e.g. an assignment recorded as Educational that
+  // was actually Speech). Changes only the label on the assignment — nothing is re-sent.
+  const [editEvalId, setEditEvalId] = useState(null)
+  async function saveEvalType(a, val) {
+    setEditEvalId(null)
+    if (!val || val === a.eval_type) return
+    setBusy(true); setMsg(null)
+    const { error } = await supabase.from('Assignments').update({ eval_type: val }).eq('id', a.id)
+    if (error) setMsg({ kind: 'danger', text: error.message })
+    else setMsg({ kind: 'success', text: `${a.Contractors?.name || 'Evaluator'}: evaluation type changed from ${a.eval_type || '—'} to ${val}.` })
+    onChanged(); setBusy(false)
+  }
+
   function startEditTesting(a) {
     setEditTestingId(a.id)
     setTestingVal((testingOverride[a.id] ?? a.testing_date ?? '').slice(0, 10))
@@ -1891,7 +1904,18 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, qaByAss
                     <Fragment key={a.id}>
                       <tr>
                         <td>{a.Contractors?.name || '—'}</td>
-                        <td>{a.eval_type || '—'}</td>
+                        <td>{editEvalId === a.id ? (
+                          <select autoFocus defaultValue={a.eval_type || ''} disabled={busy}
+                            onChange={e => saveEvalType(a, e.target.value)} onBlur={() => setEditEvalId(null)}
+                            onKeyDown={e => { if (e.key === 'Escape') setEditEvalId(null) }}
+                            style={{ padding: '2px 4px', fontSize: 12 }}>
+                            {!a.eval_type && <option value="">—</option>}
+                            {EVAL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                            {a.eval_type && !EVAL_TYPES.includes(a.eval_type) && <option value={a.eval_type}>{a.eval_type}</option>}
+                          </select>
+                        ) : (
+                          <span className="tbl-link" title="Click to change this evaluator's evaluation type" onClick={() => setEditEvalId(a.id)}>{a.eval_type || '—'}</span>
+                        )}</td>
                         <td><AcceptBadge a={a} /></td>
                         <td style={dueColor(a.report_due_date)}>{fmtDate(a.report_due_date)}</td>
                         <td>{editTestingId === a.id ? (
