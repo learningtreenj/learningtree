@@ -2781,6 +2781,9 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
   // whose window (26th of the prior month → 25th) contains the day it was received. ──
   const earningByAsg = useMemo(() => new Map(earnings.map(e => [e.assignment_id, e])), [earnings])
   const paidOf = id => cellVal(`e:${id}`)
+  // Which payroll month a line belongs to: once it has a paid date, the month that date falls
+  // in (same 26th→25th window); until then, the month the report was received.
+  const lineMonth = l => { const paid = paidOf(l.id); return paid ? payrollMonthOf(paid) : l.month }
   const payLines = useMemo(() => assignments
     .filter(a => a.contractor_id != null && a.submitted_at)
     .map(a => {
@@ -2813,9 +2816,10 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
   const payMonths = useMemo(() => {
     const m = new Map()
     for (const l of payLines) {
-      const g = m.get(l.month) || { month: l.month, count: 0, unpaid: 0 }
+      const lm = lineMonth(l)
+      const g = m.get(lm) || { month: lm, count: 0, unpaid: 0 }
       g.count++; if (!paidOf(l.id)) g.unpaid++
-      m.set(l.month, g)
+      m.set(lm, g)
     }
     return [...m.values()].sort((x, y) => y.month.localeCompare(x.month))
   }, [payLines, dateOverride])
@@ -2829,7 +2833,7 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
   const [viewArchive, setViewArchive] = useState(null)
   // Default to the payroll period we're currently in if it has reports, else the newest one.
   const month = payMonth || (payMonths.find(m => m.month === payrollMonthOf(todayISO())) || payMonths[0])?.month || ''
-  const monthLines = useMemo(() => payLines.filter(l => l.month === month).sort(lineSort), [payLines, month])
+  const monthLines = useMemo(() => payLines.filter(l => lineMonth(l) === month).sort(lineSort), [payLines, month, dateOverride])
   const visibleLines = monthLines.filter(l =>
     (!payEval || l.evaluator === payEval) && (!payField || l.field === payField) &&
     (payStatus === 'all' || (payStatus === 'paid') === !!paidOf(l.id)))
@@ -2857,7 +2861,7 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
   const togglePick = id => setPicked(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
   const toggleAll = () => setPicked(allUnpaidPicked ? new Set() : new Set(visibleUnpaid.map(l => l.id)))
 
-  const archiveRowsFor = (m, paidFor = l => paidOf(l.id)) => payLines.filter(l => l.month === m).sort(lineSort).map(l => ({
+  const archiveRowsFor = (m, paidFor = l => paidOf(l.id)) => payLines.filter(l => (paidFor(l) ? payrollMonthOf(paidFor(l)) : l.month) === m).sort(lineSort).map(l => ({
     evaluator: l.evaluator, field: l.field, case_number: l.case_number, student: l.student,
     payment_method: l.method, amount: l.amount, report_received: l.received, date_paid: paidFor(l) || '',
   }))
@@ -2901,7 +2905,8 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
         note = ` Every ${monthLabel(month)} evaluation is now paid — the month has been archived below.`
       }
     }
-    setMsg({ kind: 'success', text: (date ? `Marked ${ids.length} evaluation${ids.length === 1 ? '' : 's'} paid on ${fmtDate(date)}.` : `Cleared the paid date on ${ids.length} evaluation${ids.length === 1 ? '' : 's'}.`) + note })
+    const movedTo = date && payrollMonthOf(date) !== month ? ` They now sit in ${monthLabel(payrollMonthOf(date))} payroll (the month that paid date falls in).` : ''
+    setMsg({ kind: 'success', text: (date ? `Marked ${ids.length} evaluation${ids.length === 1 ? '' : 's'} paid on ${fmtDate(date)}.` : `Cleared the paid date on ${ids.length} evaluation${ids.length === 1 ? '' : 's'}.`) + movedTo + note })
     onChanged(); setBusy(false)
   }
 
