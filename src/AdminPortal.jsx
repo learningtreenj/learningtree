@@ -3055,7 +3055,12 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
             onClick={() => setNotifyOpen(true)}>
             🔔 {notifySelected ? `Notify selected (${notifyGroups.length} evaluator${notifyGroups.length === 1 ? '' : 's'})` : `Notify all paid (${notifyGroups.length} evaluator${notifyGroups.length === 1 ? '' : 's'})`}
           </button>
-          {monthAllPaid && <button className="btn btn-secondary btn-sm" disabled={busy} onClick={archiveNow}>📦 {monthArchive ? 'Update archive' : 'Archive month'}</button>}
+          {(monthAllPaid || monthArchive) && (
+            <button className="btn btn-secondary btn-sm" disabled={busy} onClick={archiveNow}
+              title={monthArchive ? 'Re-save the frozen copy of this month so it matches what is shown now' : 'File this fully-paid month under Archived Payroll Months'}>
+              📦 {monthArchive ? 'Update archive' : 'Archive month'}
+            </button>
+          )}
           <button className="btn btn-ghost btn-sm" disabled={monthLines.length === 0} onClick={() => exportPayrollToExcel(month, archiveRowsFor(month))}>⬇ Export to Excel</button>
         </div>
         {monthAllPaid && !monthArchive && <div className="alert alert-success">Every evaluation for {monthLabel(month)} is paid. Click <strong>Archive month</strong> to file it below.</div>}
