@@ -1605,6 +1605,12 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, qaByAss
   const [recvDate, setRecvDate] = useState(todayISO())
   const [recvTesting, setRecvTesting] = useState('')
   const [recvFiles, setRecvFiles] = useState([])
+  const [recvDrag, setRecvDrag] = useState(false)
+  const addRecvFiles = list => {
+    const ok = Array.from(list || []).filter(f => /\.(pdf|docx?)$/i.test(f.name))
+    if (!ok.length) return
+    setRecvFiles(prev => [...prev.filter(f => !ok.some(o => o.name === f.name)), ...ok])
+  }
   function startRecordReport(a) {
     setRecvId(a.id); setRecvDate(todayISO()); setRecvTesting(a.testing_date ? String(a.testing_date).slice(0, 10) : ''); setRecvFiles([])
     setEditAsgId(null); setConfirmRemoveId(null); setMsg(null)
@@ -2009,11 +2015,32 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, qaByAss
                                 <input type="date" value={recvDate} onChange={e => setRecvDate(e.target.value)} style={{ padding: '4px 6px', fontSize: 13, border: '1px solid var(--border)', borderRadius: 5 }} /></label>
                               <label style={{ fontSize: 12, color: '#555' }}>Testing date *<br />
                                 <input type="date" value={recvTesting} onChange={e => setRecvTesting(e.target.value)} style={{ padding: '4px 6px', fontSize: 13, border: '1px solid var(--border)', borderRadius: 5 }} /></label>
-                              <label style={{ fontSize: 12, color: '#555' }}>Report file(s) — optional<br />
-                                <input type="file" multiple accept=".pdf,.doc,.docx" onChange={e => setRecvFiles(Array.from(e.target.files || []))} style={{ fontSize: 12 }} /></label>
                               <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => recordReport(a)}>{busy ? 'Saving…' : '✓ Mark as submitted'}</button>
                               <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setRecvId(null)}>Cancel</button>
                             </div>
+                            <label className="upload-zone"
+                              style={{ display: 'block', marginTop: 10, padding: 14, borderColor: recvDrag ? 'var(--accent)' : undefined, background: recvDrag ? 'var(--accent-light)' : undefined }}
+                              onDragEnter={e => { e.preventDefault(); e.stopPropagation(); setRecvDrag(true) }}
+                              onDragOver={e => { e.preventDefault(); e.stopPropagation(); setRecvDrag(true) }}
+                              onDragLeave={e => { e.preventDefault(); e.stopPropagation(); setRecvDrag(false) }}
+                              onDrop={e => { e.preventDefault(); e.stopPropagation(); setRecvDrag(false); addRecvFiles(e.dataTransfer?.files) }}>
+                              <div style={{ pointerEvents: 'none' }}>
+                                <strong>{recvDrag ? 'Drop the report here' : 'Drag & drop the report here, or click to choose'}</strong>
+                                <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 3 }}>PDF or Word (.doc/.docx) · several files at once is fine · optional</div>
+                              </div>
+                              <input type="file" multiple accept=".pdf,.doc,.docx" style={{ display: 'none' }}
+                                onChange={e => { addRecvFiles(e.target.files); e.target.value = '' }} />
+                            </label>
+                            {recvFiles.length > 0 && (
+                              <div style={{ marginTop: 6, fontSize: 12 }}>
+                                {recvFiles.map(f => (
+                                  <span key={f.name} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, background: '#fff', border: '1px solid var(--border)', borderRadius: 999, padding: '2px 10px', marginRight: 6, marginBottom: 4 }}>
+                                    📄 {f.name}
+                                    <span style={{ cursor: 'pointer', color: 'var(--red)' }} title="Remove" onClick={() => setRecvFiles(prev => prev.filter(x => x.name !== f.name))}>✕</span>
+                                  </span>
+                                ))}
+                              </div>
+                            )}
                             <div style={{ fontSize: 11, color: '#777', marginTop: 6 }}>
                               The evaluator sees the file in their portal too. The received date sets which payroll month this evaluation falls in.
                             </div>
