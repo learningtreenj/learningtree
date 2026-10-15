@@ -1598,6 +1598,43 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, qaByAss
     onChanged(); setBusy(false)
   }
 
+  // Record a report the evaluator sent outside the portal (email / mail). Stores the file(s)
+  // under the same path the evaluator's own upload would use, and marks the assignment
+  // Submitted as of the date the office received it — so it flows to Report Review and Payroll.
+  const [recvId, setRecvId] = useState(null)
+  const [recvDate, setRecvDate] = useState(todayISO())
+  const [recvTesting, setRecvTesting] = useState('')
+  const [recvFiles, setRecvFiles] = useState([])
+  function startRecordReport(a) {
+    setRecvId(a.id); setRecvDate(todayISO()); setRecvTesting(a.testing_date ? String(a.testing_date).slice(0, 10) : ''); setRecvFiles([])
+    setEditAsgId(null); setConfirmRemoveId(null); setMsg(null)
+  }
+  async function recordReport(a) {
+    if (!recvDate) { setMsg({ kind: 'warn', text: 'Enter the date the report was received.' }); return }
+    if (!recvTesting) { setMsg({ kind: 'warn', text: 'Enter the testing date — it is required for the invoice.' }); return }
+    setBusy(true); setMsg(null)
+    const existing = Array.isArray(a.report_files) ? a.report_files : (a.report_url ? [{ path: a.report_url, name: a.report_url.split('/').pop() }] : [])
+    const uploaded = []
+    for (const file of recvFiles) {
+      const path = `${a.contractor_id}/${a.id}/${file.name}`
+      const { error: upErr } = await supabase.storage.from('reports').upload(path, file, { upsert: true })
+      if (upErr) { setMsg({ kind: 'danger', text: `Upload failed for ${file.name}: ${upErr.message}` }); setBusy(false); return }
+      uploaded.push({ path, name: file.name, uploaded_at: new Date().toISOString(), recorded_by_office: true })
+    }
+    const merged = [...existing.filter(f => !uploaded.some(u => u.path === f.path)), ...uploaded]
+    const receivedAt = new Date(`${recvDate}T12:00:00`).toISOString()   // noon local → stays on that calendar day
+    const patch = {
+      status: 'Submitted', submitted_at: receivedAt, testing_date: recvTesting,
+      report_files: merged, report_url: merged.length ? merged[merged.length - 1].path : a.report_url || null,
+      notes: [a.notes, `Report received by the office outside the portal on ${fmtDate(recvDate)}${uploaded.length ? '' : ' (no file attached)'}.`].filter(Boolean).join('\n'),
+    }
+    const { error } = await supabase.from('Assignments').update(patch).eq('id', a.id)
+    if (error) { setMsg({ kind: 'danger', text: error.message }); setBusy(false); return }
+    setRecvId(null)
+    setMsg({ kind: 'success', text: `${a.Contractors?.name || 'Evaluator'} — ${a.eval_type || 'evaluation'}: report recorded as received ${fmtDate(recvDate)}${uploaded.length ? ` with ${uploaded.length} file${uploaded.length === 1 ? '' : 's'}` : ' (no file)'}. It now shows in Report Review and Payroll.` })
+    onChanged(); setBusy(false)
+  }
+
   function startEditTesting(a) {
     setEditTestingId(a.id)
     setTestingVal((testingOverride[a.id] ?? a.testing_date ?? '').slice(0, 10))
@@ -1937,12 +1974,18 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, qaByAss
                           const recd = a.submitted_at
                             ? <div style={{ fontSize: 11, color: 'var(--muted)', whiteSpace: 'nowrap' }} title="Date this evaluator's report was received">Rec'd {fmtDate(receivedISO(a.submitted_at))}</div>
                             : null
-                          if (!files.length) return recd || '—'
+                          const recordBtn = a.contractor_id != null && (!a.submitted_at || !files.length)
+                            ? <button className="btn btn-ghost btn-sm" disabled={busy} style={{ marginTop: files.length || recd ? 4 : 0 }}
+                                title="Record a report the evaluator sent by email or mail — marks it Submitted and attaches the file"
+                                onClick={() => startRecordReport(a)}>📥 {a.submitted_at ? 'Attach report' : 'Record report'}</button>
+                            : null
+                          if (!files.length) return <>{recd}{recordBtn}{!recd && !recordBtn && '—'}</>
                           return <>
                             {files.map((f, i) => (
                               <div key={f.path || i}><span className="tbl-link" onClick={() => viewReport(f.path)}>📄 {files.length > 1 ? (f.name || f.path.split('/').pop()) : 'View'}</span></div>
                             ))}
                             {recd}
+                            {recordBtn}
                           </>
                         })()}</td>
                         <td style={{ whiteSpace: 'nowrap' }}>
@@ -1957,6 +2000,26 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, qaByAss
                           <button className="btn btn-danger-outline btn-sm" title="Remove this assignment" disabled={busy} onClick={() => { setConfirmRemoveId(a.id); setEditAsgId(null); setMsg(null) }}>🗑</button>
                         </td>
                       </tr>
+                      {recvId === a.id && (
+                        <tr>
+                          <td colSpan={9} style={{ background: '#fffbeb' }}>
+                            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>📥 Record a report received outside the portal — {a.Contractors?.name} · {a.eval_type || 'evaluation'}</div>
+                            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap' }}>
+                              <label style={{ fontSize: 12, color: '#555' }}>Date received *<br />
+                                <input type="date" value={recvDate} onChange={e => setRecvDate(e.target.value)} style={{ padding: '4px 6px', fontSize: 13, border: '1px solid var(--border)', borderRadius: 5 }} /></label>
+                              <label style={{ fontSize: 12, color: '#555' }}>Testing date *<br />
+                                <input type="date" value={recvTesting} onChange={e => setRecvTesting(e.target.value)} style={{ padding: '4px 6px', fontSize: 13, border: '1px solid var(--border)', borderRadius: 5 }} /></label>
+                              <label style={{ fontSize: 12, color: '#555' }}>Report file(s) — optional<br />
+                                <input type="file" multiple accept=".pdf,.doc,.docx" onChange={e => setRecvFiles(Array.from(e.target.files || []))} style={{ fontSize: 12 }} /></label>
+                              <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => recordReport(a)}>{busy ? 'Saving…' : '✓ Mark as submitted'}</button>
+                              <button className="btn btn-ghost btn-sm" disabled={busy} onClick={() => setRecvId(null)}>Cancel</button>
+                            </div>
+                            <div style={{ fontSize: 11, color: '#777', marginTop: 6 }}>
+                              The evaluator sees the file in their portal too. The received date sets which payroll month this evaluation falls in.
+                            </div>
+                          </td>
+                        </tr>
+                      )}
                       {editAsgId === a.id && (
                         <tr>
                           <td colSpan={9} style={{ background: 'var(--accent-light)' }}>
