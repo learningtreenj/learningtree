@@ -518,9 +518,28 @@ function ContractorsByLanguage({ contractors = [], onLanguage }) {
 
 function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, onOpenCase, earnings = [], contractors = [], onLanguage }) {
   const now = new Date().toISOString().slice(0, 7)
-  const completedThisMonth = assignments.filter(a => (a.submitted_at || '').slice(0, 7) === now).length
-  const awaiting = openAssignments.filter(a => /testing complet|draft/i.test(a.status || '')).length
+  const submittedThisMonth = assignments.filter(a => (a.submitted_at || '').slice(0, 7) === now)
+  const completedThisMonth = submittedThisMonth.length
+  const awaitingList = openAssignments.filter(a => /testing complet|draft/i.test(a.status || ''))
+  const awaiting = awaitingList.length
   const overdue = openAssignments.filter(a => { const n = daysLeft(a.report_due_date); return n !== null && n < 0 })
+
+  // Click a stat (or the overdue banner) to list the assignments behind the number.
+  const [drill, setDrill] = useState(null)
+  const byDue = (x, y) => (x.report_due_date || '9999').localeCompare(y.report_due_date || '9999')
+  const DRILLS = {
+    overdue: { title: 'Past due', items: [...overdue].sort(byDue), note: 'Open evaluations whose report due date has passed.' },
+    due: { title: 'Due this week', items: [...dueThisWeek].sort(byDue), note: 'Open evaluations due within the next 7 days (including any already overdue).' },
+    open: { title: 'Open assignments', items: [...openAssignments].sort(byDue), note: 'Every evaluation not yet submitted, on cases not marked complete.' },
+    submitted: { title: 'Submitted this month', items: [...submittedThisMonth].sort((x, y) => (y.submitted_at || '').localeCompare(x.submitted_at || '')), note: `Reports received since the 1st of the month.`, submitted: true },
+    awaiting: { title: 'Awaiting reports', items: [...awaitingList].sort(byDue), note: 'Evaluations where testing is done and the report is being written.' },
+  }
+  const stat = (key, num, label, color) => (
+    <div key={key} onClick={() => setDrill(d => d === key ? null : key)} title={`Click to see the ${label.toLowerCase()}`}
+      style={{ cursor: 'pointer', borderRadius: 6, outline: drill === key ? '2px solid var(--accent)' : 'none', outlineOffset: -1 }}>
+      <StatCard num={num} label={label} color={color} />
+    </div>
+  )
 
   const [expanded, setExpanded] = useState({})
   const toggle = name => setExpanded(p => ({ ...p, [name]: !p[name] }))
@@ -562,13 +581,53 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
 
   return (
     <>
-      {overdue.length > 0 && <div className="alert alert-danger">⚠️ <span><strong>{overdue.length} assignment{overdue.length > 1 ? 's are' : ' is'} past due.</strong> Check the Due Date Monitor.</span></div>}
+      {overdue.length > 0 && (
+        <div className="alert alert-danger" style={{ cursor: 'pointer' }} onClick={() => setDrill(d => d === 'overdue' ? null : 'overdue')} title="Click to see which">
+          ⚠️ <span><strong>{overdue.length} assignment{overdue.length > 1 ? 's are' : ' is'} past due.</strong> Click to see {overdue.length > 1 ? 'them' : 'it'}.</span>
+        </div>
+      )}
       <div className="stat-grid stat-grid-4">
-        <StatCard num={dueThisWeek.length} label="Due This Week" color="blue" />
-        <StatCard num={openAssignments.length} label="Open Assignments" color="yellow" />
-        <StatCard num={completedThisMonth} label="Submitted This Month" color="green" />
-        <StatCard num={awaiting} label="Awaiting Reports" color="orange" />
+        {stat('due', dueThisWeek.length, 'Due This Week', 'blue')}
+        {stat('open', openAssignments.length, 'Open Assignments', 'yellow')}
+        {stat('submitted', completedThisMonth, 'Submitted This Month', 'green')}
+        {stat('awaiting', awaiting, 'Awaiting Reports', 'orange')}
       </div>
+      {drill && DRILLS[drill] && (() => {
+        const d = DRILLS[drill]
+        return (
+          <div className="card" style={{ marginBottom: 14, border: '2px solid var(--accent)' }}>
+            <div className="card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span>{d.title} ({d.items.length})<span style={{ fontWeight: 400, fontSize: 12, color: 'var(--muted)', marginLeft: 10 }}>{d.note}</span></span>
+              <button className="btn btn-ghost btn-sm" onClick={() => setDrill(null)}>✕ Close</button>
+            </div>
+            <div className="tbl-wrap" style={{ maxHeight: 420, overflow: 'auto' }}>
+              <table>
+                <thead><tr><th>Case</th><th>Student</th><th>District</th><th>Evaluator</th><th>Evaluation</th><th>{d.submitted ? 'Submitted' : 'Due'}</th>{!d.submitted && <th>Days</th>}<th>Status</th></tr></thead>
+                <tbody>
+                  {d.items.length === 0 && <tr><td colSpan={8} style={{ color: '#888' }}>Nothing here.</td></tr>}
+                  {d.items.map(a => {
+                    const n = daysLeft(a.report_due_date)
+                    return (
+                      <tr key={a.id}>
+                        <td><span className="tbl-link" onClick={() => openCaseById(a.case_id)}>{a.Cases?.case_number || a.case_id}</span></td>
+                        <td><span className="tbl-link" onClick={() => openCaseById(a.case_id)}>{a.Cases?.Student_name || '—'}</span></td>
+                        <td>{a.Cases?.School_district || '—'}</td>
+                        <td>{a.Contractors?.name || <span style={{ color: 'var(--red)' }}>Unassigned</span>}</td>
+                        <td>{a.eval_type || '—'}</td>
+                        {d.submitted
+                          ? <td style={{ whiteSpace: 'nowrap' }}>{fmtDate(receivedISO(a.submitted_at))}</td>
+                          : <td style={{ ...dueColor(a.report_due_date), whiteSpace: 'nowrap' }}>{fmtDate(a.report_due_date)}</td>}
+                        {!d.submitted && <td style={dueColor(a.report_due_date)}>{n === null ? '—' : n < 0 ? `${-n} overdue` : n}</td>}
+                        <td>{statusBadge(a)}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )
+      })()}
       <DistrictHeatmap cases={cases} assignments={assignments} />
       <ContractorsByLanguage contractors={contractors} onLanguage={onLanguage} />
       <div className="card">
