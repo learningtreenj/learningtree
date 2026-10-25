@@ -358,7 +358,8 @@ export default function AdminPortal({ user }) {
         languageFilter={contractorLang} onClearLanguageFilter={() => setContractorLang(null)} />}
       {screen === 'qa' && <QaQueue assignments={assignments} qaByAssignment={qaByAssignment} earnings={earnings} onChanged={load} />}
       {screen === 'invoices' && <InvoiceList invoices={invoices} cases={cases} onChanged={load} />}
-      {screen === 'payroll' && <Payroll assignments={assignments} earnings={earnings} batches={batches} contractors={contractors} onChanged={load} />}
+      {screen === 'payroll' && <Payroll assignments={assignments} earnings={earnings} batches={batches} contractors={contractors} onChanged={load}
+        onOpenCase={id => { const c = cases.find(x => x.id === id); if (c) { setSelectedCase(c); setScreen('casedetail') } }} />}
       {screen === 'rates' && <RateTable />}
       {screen === 'due' && <DueMonitor assignments={openAssignments} onOpenCase={id => { const c = cases.find(x => x.id === id); if (c) { setSelectedCase(c); setScreen('casedetail') } }} />}
       {screen === 'emaillog' && <EmailLog emailLog={emailLog} assignments={assignments} onChanged={load} />}
@@ -2721,7 +2722,8 @@ function InvoiceList({ invoices, cases, onChanged }) {
   )
 }
 
-function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
+function Payroll({ assignments, earnings, batches, contractors, onChanged, onOpenCase }) {
+  const openCase = id => { if (onOpenCase && id != null) onOpenCase(id) }
   const [msg, setMsg] = useState(null)
   const [busy, setBusy] = useState(false)
   const contractorById = useMemo(() => new Map(contractors.map(k => [k.identifier, k])), [contractors])
@@ -2851,7 +2853,7 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
       const uploaded = receivedISO(a.submitted_at)
       const received = a.payroll_date ? String(a.payroll_date).slice(0, 10) : uploaded
       return {
-        id: a.id, month: payrollMonthOf(received), received, uploaded, adjusted: !!a.payroll_date, contractor_id: a.contractor_id,
+        id: a.id, case_id: a.case_id, month: payrollMonthOf(received), received, uploaded, adjusted: !!a.payroll_date, contractor_id: a.contractor_id,
         evaluator: k.name || '—', field: a.eval_type || '—',
         case_number: a.Cases?.case_number || '', student: a.Cases?.Student_name || '',
         method: k.preferred_payment_method || '',
@@ -3153,8 +3155,8 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
                     <td><input type="checkbox" checked={picked.has(l.id)} onChange={() => togglePick(l.id)} /></td>
                     <td style={{ fontWeight: 600 }}>{l.evaluator}</td>
                     <td>{l.field}</td>
-                    <td style={{ whiteSpace: 'nowrap' }}>{l.case_number || '—'}</td>
-                    <td>{l.student || '—'}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}><span className="tbl-link" title="Open this case" onClick={() => openCase(l.case_id)}>{l.case_number || '—'}</span></td>
+                    <td><span className="tbl-link" title="Open this case" onClick={() => openCase(l.case_id)}>{l.student || '—'}</span></td>
                     <td>
                       <select value={l.method} disabled={busy} onChange={e => setMethod(l.contractor_id, e.target.value)}
                         title="Saved on the evaluator's profile — applies to all of their rows"
@@ -3262,8 +3264,8 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged }) {
               {caseGroups.length === 0 && <tr><td colSpan={5} style={{ color: '#888' }}>No assigned cases yet — assign a contractor to a case and it appears here.</td></tr>}
               {caseGroups.map(g => (
                 <tr key={g.case_id}>
-                  <td style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 700, whiteSpace: 'nowrap' }}>{invNo(g.caseRow)}</td>
-                  <td>{g.caseRow?.Student_name || '—'}</td>
+                  <td style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 700, whiteSpace: 'nowrap' }}><span className="tbl-link" title="Open this case" onClick={() => openCase(g.case_id)}>{invNo(g.caseRow)}</span></td>
+                  <td><span className="tbl-link" title="Open this case" onClick={() => openCase(g.case_id)}>{g.caseRow?.Student_name || '—'}</span></td>
                   <td>{g.caseRow?.School_district || '—'}</td>
                   <td style={{ textAlign: 'right', verticalAlign: 'top' }}>
                     <div style={{ fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>${expectedIncome(g).toLocaleString()}</div>
