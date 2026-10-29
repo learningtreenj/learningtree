@@ -105,6 +105,31 @@ export function exportPayrollToExcel(month, rows) {
   XLSX.writeFile(wb, `learning-tree-payroll-${month}.xlsx`)
 }
 
+// One evaluator's evaluations for a year (rows from the Payroll "By Evaluator" view).
+export function exportEvaluatorYearToExcel(name, year, lines) {
+  const monthLabel = ym => { const [y, m] = String(ym || '').split('-').map(Number); return (y && m) ? new Date(y, m - 1, 1).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) : (ym || '') }
+  const out = (lines || []).map((l, i) => ({
+    '#': i + 1,
+    'Payroll Month': monthLabel(l.month),
+    'Case #': l.case_number || '',
+    'Student Name': l.student || '',
+    'Evaluation': l.field || '',
+    'Report Received': isoDate(l.received),
+    'Amount': Number(l.amount || 0),
+    'Date Paid': isoDate(l.paid),
+    'Status': l.paid ? 'Paid' : 'Unpaid',
+  }))
+  const total = (lines || []).reduce((n, l) => n + Number(l.amount || 0), 0)
+  const paid = (lines || []).filter(l => l.paid).reduce((n, l) => n + Number(l.amount || 0), 0)
+  out.push({ '#': '', 'Payroll Month': '', 'Case #': '', 'Student Name': `TOTAL ${year} — ${(lines || []).length} evaluations`, 'Evaluation': '', 'Report Received': '', 'Amount': total, 'Date Paid': '', 'Status': `${paid} paid / ${total - paid} unpaid` })
+  const ws = XLSX.utils.json_to_sheet(out)
+  ws['!cols'] = [{ wch: 5 }, { wch: 16 }, { wch: 10 }, { wch: 30 }, { wch: 14 }, { wch: 15 }, { wch: 10 }, { wch: 12 }, { wch: 22 }]
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, String(year))
+  const safe = String(name || 'evaluator').replace(/[^A-Za-z0-9 _-]+/g, '').trim().replace(/\s+/g, '-')
+  XLSX.writeFile(wb, `learning-tree-${safe}-${year}.xlsx`)
+}
+
 export function exportCasesToExcel(cases, assignments) {
   const wb = buildCasesWorkbook(cases, assignments)
   const today = new Date().toISOString().slice(0, 10)

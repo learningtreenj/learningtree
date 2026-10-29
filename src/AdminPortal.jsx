@@ -7,7 +7,7 @@ import DistrictHeatmap from './DistrictHeatmap.jsx'
 import { contractorLanguages, contractorSpeaks } from './contractorLangs.js'
 import { scoreContractors } from './smartAssign.js'
 import { extractTextFromFile } from './extractDocumentText.js'
-import { exportCasesToExcel, exportPayrollToExcel } from './exportExcel.js'
+import { exportCasesToExcel, exportPayrollToExcel, exportEvaluatorYearToExcel } from './exportExcel.js'
 import { zipSync } from 'fflate'
 
 const EVAL_TYPES = ['Speech', 'Educational', 'Psych', 'Social', 'OT', 'PT']
@@ -3043,6 +3043,38 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged, onOpe
     onChanged(); setBusy(false)
   }
 
+  // ── By Evaluator view: yearly accrued earnings per evaluator, click a name for the detail ──
+  const [payView, setPayView] = useState('monthly')     // monthly | evaluators
+  const thisYear = String(new Date().getFullYear())
+  const [evalYear, setEvalYear] = useState(thisYear)
+  const [evalSearch, setEvalSearch] = useState('')
+  const [evalSel, setEvalSel] = useState(null)          // contractor identifier
+  const [includeInactive, setIncludeInactive] = useState(false)
+  const yearOptions = useMemo(() => {
+    const ys = new Set(payLines.map(l => lineMonth(l).slice(0, 4)).filter(Boolean)); ys.add(thisYear)
+    return [...ys].sort((a, b) => b.localeCompare(a))
+  }, [payLines, dateOverride])
+  // A line counts toward the year its payroll month falls in.
+  const yearLines = payLines.filter(l => lineMonth(l).slice(0, 4) === evalYear)
+  const evalRows = useMemo(() => {
+    const m = new Map()
+    for (const l of yearLines) {
+      const g = m.get(l.contractor_id) || { contractor_id: l.contractor_id, count: 0, paid: 0, unpaid: 0, total: 0 }
+      const amt = Number(l.amount || 0)
+      g.count++; g.total += amt; if (paidOf(l.id)) g.paid += amt; else g.unpaid += amt
+      m.set(l.contractor_id, g)
+    }
+    const q = evalSearch.trim().toLowerCase()
+    return contractors
+      .filter(k => includeInactive || k.active !== false || m.has(k.identifier))
+      .filter(k => !q || (k.name || '').toLowerCase().includes(q))
+      .map(k => ({ k, ...(m.get(k.identifier) || { contractor_id: k.identifier, count: 0, paid: 0, unpaid: 0, total: 0 }) }))
+      .sort((a, b) => (a.k.name || '').localeCompare(b.k.name || ''))
+  }, [yearLines, contractors, evalSearch, includeInactive, dateOverride])
+  const evalDetailLines = evalSel == null ? [] : yearLines.filter(l => l.contractor_id === evalSel)
+    .sort((x, y) => lineMonth(y).localeCompare(lineMonth(x)) || y.received.localeCompare(x.received) || x.student.localeCompare(y.student))
+  const evalTotals = { total: sumOf(evalRows.map(r => ({ amount: r.total }))), paid: sumOf(evalRows.map(r => ({ amount: r.paid }))), unpaid: sumOf(evalRows.map(r => ({ amount: r.unpaid }))) }
+
   async function setMethod(contractorId, method) {
     setBusy(true); setMsg(null)
     const { error } = await supabase.from('Contractors').update({ preferred_payment_method: method || null }).eq('identifier', contractorId)
@@ -3053,6 +3085,129 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged, onOpe
   return (
     <>
       {msg && <div className={`alert alert-${msg.kind}`}>{msg.text}</div>}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+        {[['monthly', '📅 Monthly Payroll'], ['evaluators', '👤 By Evaluator']].map(([id, label]) => (
+          <span key={id} className={`filter-chip ${payView === id ? 'active' : ''}`} onClick={() => { setPayView(id); setEvalSel(null) }}>{label}</span>
+        ))}
+      </div>
+
+      {payView === 'evaluators' && evalSel == null && (() => {
+        const k = null
+        return (
+        <div className="card" style={{ marginBottom: 14 }}>
+          <div className="sec-head">
+            <h3>Earnings by Evaluator — {evalYear}</h3>
+            <div className="filter-bar" style={{ margin: 0 }}>
+              <select value={evalYear} onChange={e => { setEvalYear(e.target.value); setEvalSel(null) }} title="Year (by payroll month)">
+                {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+              </select>
+              <input type="text" placeholder="🔍 Find an evaluator…" value={evalSearch} onChange={e => setEvalSearch(e.target.value)} />
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer' }}>
+                <input type="checkbox" checked={includeInactive} onChange={e => setIncludeInactive(e.target.checked)} /> Include inactive evaluators
+              </label>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap', fontSize: 13, marginBottom: 10 }}>
+            <span><span style={{ color: 'var(--muted)', marginRight: 6 }}>Evaluators</span><strong>{evalRows.length}</strong></span>
+            <span><span style={{ color: 'var(--muted)', marginRight: 6 }}>Accrued {evalYear}</span><strong style={{ fontVariantNumeric: 'tabular-nums' }}>${evalTotals.total.toLocaleString()}</strong></span>
+            <span><span style={{ color: 'var(--muted)', marginRight: 6 }}>Paid</span><strong style={{ color: 'var(--green)', fontVariantNumeric: 'tabular-nums' }}>${evalTotals.paid.toLocaleString()}</strong></span>
+            <span><span style={{ color: 'var(--muted)', marginRight: 6 }}>Unpaid</span><strong style={{ color: evalTotals.unpaid ? 'var(--red)' : undefined, fontVariantNumeric: 'tabular-nums' }}>${evalTotals.unpaid.toLocaleString()}</strong></span>
+          </div>
+          <div className="tbl-wrap sticky-head">
+            <table>
+              <thead><tr><th>Evaluator</th><th>Field</th><th>Payment Method</th><th style={{ textAlign: 'right' }}>Evaluations</th><th style={{ textAlign: 'right' }}>Paid</th><th style={{ textAlign: 'right' }}>Unpaid</th><th style={{ textAlign: 'right' }}>Total {evalYear}</th></tr></thead>
+              <tbody>
+                {evalRows.length === 0 && <tr><td colSpan={7} style={{ color: '#888' }}>No evaluators match.</td></tr>}
+                {evalRows.map(r => (
+                  <tr key={r.k.identifier} style={{ cursor: 'pointer', color: r.k.active === false ? 'var(--muted)' : undefined }} onClick={() => setEvalSel(r.k.identifier)} title="Click for this evaluator's cases and payments">
+                    <td style={{ fontWeight: 600 }}><span className="tbl-link">{r.k.name}</span>{r.k.active === false && <span className="badge-s s-pending" style={{ marginLeft: 6, fontSize: 10 }}>Inactive</span>}</td>
+                    <td>{r.k.field || '—'}</td>
+                    <td>{r.k.preferred_payment_method || <span style={{ color: '#9aa1ab' }}>— not set</span>}</td>
+                    <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{r.count}</td>
+                    <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'var(--green)' }}>${r.paid.toLocaleString()}</td>
+                    <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: r.unpaid ? 'var(--red)' : undefined }}>${r.unpaid.toLocaleString()}</td>
+                    <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 700 }}>${r.total.toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+              {evalRows.length > 0 && (
+                <tfoot><tr style={{ fontWeight: 700, background: '#f0f2f5' }}>
+                  <td colSpan={3}>Total — {evalRows.length} evaluator{evalRows.length === 1 ? '' : 's'}</td>
+                  <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{evalRows.reduce((n, r) => n + r.count, 0)}</td>
+                  <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>${evalTotals.paid.toLocaleString()}</td>
+                  <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>${evalTotals.unpaid.toLocaleString()}</td>
+                  <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>${evalTotals.total.toLocaleString()}</td>
+                </tr></tfoot>
+              )}
+            </table>
+          </div>
+        </div>
+        )
+      })()}
+
+      {payView === 'evaluators' && evalSel != null && (() => {
+        const k = contractorById.get(evalSel) || {}
+        const paidTot = sumOf(evalDetailLines.filter(l => paidOf(l.id)))
+        const tot = sumOf(evalDetailLines)
+        return (
+          <div className="card" style={{ marginBottom: 14, border: '2px solid var(--accent)' }}>
+            <div className="sec-head">
+              <h3>{k.name || 'Evaluator'} — {evalYear} earnings</h3>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <select value={evalYear} onChange={e => setEvalYear(e.target.value)} style={{ padding: '4px 8px', fontSize: 13, border: '1px solid var(--border)', borderRadius: 5, background: '#fff' }}>
+                  {yearOptions.map(y => <option key={y} value={y}>{y}</option>)}
+                </select>
+                <button className="btn btn-ghost btn-sm" disabled={evalDetailLines.length === 0}
+                  onClick={() => exportEvaluatorYearToExcel(k.name || 'evaluator', evalYear, evalDetailLines.map(l => ({ ...l, paid: paidOf(l.id), month: lineMonth(l) })))}>⬇ Export to Excel</button>
+                <button className="btn btn-ghost btn-sm" onClick={() => setEvalSel(null)}>← All evaluators</button>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 22, flexWrap: 'wrap', fontSize: 13, marginBottom: 10 }}>
+              <span><span style={{ color: 'var(--muted)', marginRight: 6 }}>Field</span><strong>{k.field || '—'}</strong></span>
+              <span><span style={{ color: 'var(--muted)', marginRight: 6 }}>Payment method</span><strong>{k.preferred_payment_method || '— not set'}</strong></span>
+              <span><span style={{ color: 'var(--muted)', marginRight: 6 }}>Rate</span><strong>{k.current_rate ? `$${parseRate(k.current_rate).toLocaleString()}` : '—'}</strong></span>
+              <span><span style={{ color: 'var(--muted)', marginRight: 6 }}>Evaluations</span><strong>{evalDetailLines.length}</strong></span>
+              <span><span style={{ color: 'var(--muted)', marginRight: 6 }}>Paid</span><strong style={{ color: 'var(--green)', fontVariantNumeric: 'tabular-nums' }}>${paidTot.toLocaleString()}</strong></span>
+              <span><span style={{ color: 'var(--muted)', marginRight: 6 }}>Unpaid</span><strong style={{ color: tot - paidTot ? 'var(--red)' : undefined, fontVariantNumeric: 'tabular-nums' }}>${(tot - paidTot).toLocaleString()}</strong></span>
+              <span><span style={{ color: 'var(--muted)', marginRight: 6 }}>Total {evalYear}</span><strong style={{ fontVariantNumeric: 'tabular-nums' }}>${tot.toLocaleString()}</strong></span>
+            </div>
+            <div className="tbl-wrap sticky-head">
+              <table>
+                <thead><tr><th>Payroll Month</th><th>Case #</th><th>Student</th><th>District</th><th>Evaluation</th><th>Report Rec'd</th><th style={{ textAlign: 'right' }}>Amount</th><th>Date Paid</th></tr></thead>
+                <tbody>
+                  {evalDetailLines.length === 0 && <tr><td colSpan={8} style={{ color: '#888' }}>No evaluations for {k.name} in {evalYear}.</td></tr>}
+                  {evalDetailLines.map((l, i) => {
+                    const paid = paidOf(l.id)
+                    const lm = lineMonth(l)
+                    const newMonth = i === 0 || lineMonth(evalDetailLines[i - 1]) !== lm
+                    return (
+                      <tr key={l.id} style={newMonth ? { borderTop: '2px solid var(--border)' } : undefined}>
+                        <td style={{ whiteSpace: 'nowrap', fontWeight: newMonth ? 700 : 400, color: newMonth ? undefined : 'transparent' }}>{monthLabel(lm)}</td>
+                        <td style={{ whiteSpace: 'nowrap' }}><span className="tbl-link" onClick={() => openCase(l.case_id)}>{l.case_number || '—'}</span></td>
+                        <td><span className="tbl-link" onClick={() => openCase(l.case_id)}>{l.student || '—'}</span></td>
+                        <td>{assignmentById.get(l.id)?.Cases?.School_district || '—'}</td>
+                        <td>{l.field}</td>
+                        <td style={{ whiteSpace: 'nowrap' }}>{fmtDate(l.received)}</td>
+                        <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>${Number(l.amount || 0).toLocaleString()}</td>
+                        <td style={{ whiteSpace: 'nowrap' }}>{paid ? <span className="badge-s s-completed">Paid {fmtDate(paid)}</span> : <span className="badge-s s-pending">Unpaid</span>}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+                {evalDetailLines.length > 0 && (
+                  <tfoot><tr style={{ fontWeight: 700, background: '#f0f2f5' }}>
+                    <td colSpan={6}>Total {evalYear} — {evalDetailLines.length} evaluation{evalDetailLines.length === 1 ? '' : 's'}</td>
+                    <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>${tot.toLocaleString()}</td>
+                    <td>${paidTot.toLocaleString()} paid</td>
+                  </tr></tfoot>
+                )}
+              </table>
+            </div>
+          </div>
+        )
+      })()}
+
+      {payView === 'monthly' && <>
       <div className="card" style={{ marginBottom: 14 }}>
         <div className="sec-head">
           <h3>Monthly Payroll{month ? ` — ${monthLabel(month)}` : ''}</h3>
@@ -3303,6 +3458,7 @@ function Payroll({ assignments, earnings, batches, contractors, onChanged, onOpe
           </div>
         )}
       </div>
+      </>}
       {notifyOpen && (
         <div onClick={() => { if (!busy) setNotifyOpen(false) }}
           style={{ position: 'fixed', inset: 0, background: 'rgba(15,23,42,.45)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }}>
