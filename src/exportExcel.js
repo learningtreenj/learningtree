@@ -40,6 +40,7 @@ export function buildCasesWorkbook(cases, assignments) {
       'Case Manager Email': c.case_manager_email || '',
       'District Contact': c.district_contact || '',
       'Referral Source': c.referral_source || '',
+      'Referral Source Contact': c.referral_source_contact || '',
       'Referral Date': isoDate(c.referral_date),
       'Created Date': isoDate(c.created_date),
       'Assignments': asg.length,

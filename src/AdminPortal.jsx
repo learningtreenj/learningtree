@@ -707,7 +707,7 @@ function NewReferral({ onCreated }) {
     Student_name: '', student_dob: '', grade: '', Language: '', School_district: '', County: '',
     district_contact: '', case_manager_name: '', case_manager_email: '', case_manager_phone: '', parents_name: '',
     parents_phone: '', parents_email: '', home_address: '', evaluation_type: '', testing_materials: '',
-    reason_for_referral: '', Report_Due_date: '', referral_source: '',
+    reason_for_referral: '', Report_Due_date: '', referral_source: '', referral_source_contact: '',
   }
   const [f, setF] = useState(empty)
   const [evalTypes, setEvalTypes] = useState([])
@@ -717,12 +717,27 @@ function NewReferral({ onCreated }) {
   const [referralFile, setReferralFile] = useState(null)  // original uploaded form, stored on create
   const [dragActive, setDragActive] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [srcMissing, setSrcMissing] = useState(false)   // highlight the referral-source fields after a failed create
+  const srcRef = useRef(null)
   const set = (k, v) => setF(prev => ({ ...prev, [k]: v }))
 
   async function create() {
     if (!f.Student_name || !f.School_district || !f.Report_Due_date) {
       setMsg({ kind: 'warn', text: 'Student name, district, and report due date are required.' }); return
     }
+    // Referral source + its contact info are typed in by the office (never auto-filled
+    // from the uploaded form) and must be present before a case can be created.
+    const missingSrc = [
+      !f.referral_source.trim() && 'referral source',
+      !f.referral_source_contact.trim() && 'referral source contact info',
+    ].filter(Boolean)
+    if (missingSrc.length) {
+      setMsg({ kind: 'warn', text: `Please enter the ${missingSrc.join(' and ')} before creating the case.` })
+      setSrcMissing(true)
+      srcRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      return
+    }
+    setSrcMissing(false)
     setBusy(true); setMsg(null)
     const phoneDigits = f.parents_phone.replace(/\D/g, '')
     const row = {
@@ -746,7 +761,8 @@ function NewReferral({ onCreated }) {
       testing_materials: f.testing_materials || null,
       reason_for_referral: f.reason_for_referral || null,
       Report_Due_date: f.Report_Due_date || null,
-      referral_source: f.referral_source || null,
+      referral_source: f.referral_source.trim(),
+      referral_source_contact: f.referral_source_contact.trim(),
       Status: 'Unassigned',
       created_date: new Date().toISOString().slice(0, 10),
     }
@@ -844,7 +860,8 @@ function NewReferral({ onCreated }) {
       testing_materials: p.testing_materials ?? prev.testing_materials,
       reason_for_referral: p.reason_for_referral ?? prev.reason_for_referral,
       Report_Due_date: p.Report_Due_date ? toISODate(p.Report_Due_date) : prev.Report_Due_date,
-      referral_source: p.referral_source ?? prev.referral_source,
+      // referral_source / referral_source_contact are deliberately NOT filled from the
+      // document — the office enters them by hand.
     }))
     if (Array.isArray(p.evaluation_types) && p.evaluation_types.length) {
       const map = { Psych: 'Psych', Ed: 'Educational', Speech: 'Speech', Social: 'Social', OT: 'OT', PT: 'PT' }
@@ -962,7 +979,33 @@ function NewReferral({ onCreated }) {
       </div>
       <div className="form-row">
         <div className="form-group"><label>Report Due Date *</label><input type="date" value={f.Report_Due_date} onChange={e => set('Report_Due_date', e.target.value)} /></div>
-        <div className="form-group"><label>Referral Source</label><input value={f.referral_source} onChange={e => set('referral_source', e.target.value)} /></div>
+        <div className="form-group"></div>
+      </div>
+
+      <div ref={srcRef}><SectionHead>Referral Source</SectionHead></div>
+      <div style={{ fontSize: 12, color: 'var(--muted)', margin: '-2px 0 8px' }}>
+        Entered by hand — these two fields are not filled in from the uploaded form.
+        {f.case_manager_name.trim() && (
+          <> If the case manager sent the referral:{' '}
+            <span className="tbl-link" onClick={() => setF(prev => ({
+              ...prev,
+              referral_source: prev.case_manager_name.trim(),
+              referral_source_contact: [prev.case_manager_email, prev.case_manager_phone].map(s => (s || '').trim()).filter(Boolean).join(' · '),
+            }))}>use {f.case_manager_name.trim()}</span>
+          </>
+        )}
+      </div>
+      <div className="form-row">
+        <div className="form-group"><label>Referral Source *</label>
+          <input value={f.referral_source} placeholder="Who sent this referral"
+            style={srcMissing && !f.referral_source.trim() ? { borderColor: 'var(--red, #dc2626)' } : undefined}
+            onChange={e => set('referral_source', e.target.value)} />
+        </div>
+        <div className="form-group"><label>Referral Source Contact Info *</label>
+          <input value={f.referral_source_contact} placeholder="Phone and/or email"
+            style={srcMissing && !f.referral_source_contact.trim() ? { borderColor: 'var(--red, #dc2626)' } : undefined}
+            onChange={e => set('referral_source_contact', e.target.value)} />
+        </div>
       </div>
 
       <button className="btn btn-primary" disabled={busy} onClick={create}>✅ Create Case</button>
@@ -1575,7 +1618,7 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, qaByAss
       district_contact: c.district_contact || '', case_manager_name: c.case_manager_name || '', case_manager_email: c.case_manager_email || '', case_manager_phone: c.case_manager_phone || '',
       parents_name: c.parents_name || '', parents_phone: c.parents_phone != null ? String(c.parents_phone) : '', parents_email: c.parents_email || '',
       home_address: c.home_address || '', evaluation_type: c.evaluation_type || '', testing_materials: c.testing_materials || '',
-      reason_for_referral: c.reason_for_referral || '', Report_Due_date: c.Report_Due_date || '', referral_source: c.referral_source || '',
+      reason_for_referral: c.reason_for_referral || '', Report_Due_date: c.Report_Due_date || '', referral_source: c.referral_source || '', referral_source_contact: c.referral_source_contact || '',
       Status: c.Status || '',
     })
     setMsg(null); setConfirmDelete(false); setEditing(true)
@@ -1631,7 +1674,7 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, qaByAss
       district_contact: form.district_contact || null, case_manager_name: form.case_manager_name || null, case_manager_email: form.case_manager_email || null, case_manager_phone: form.case_manager_phone || null,
       parents_name: form.parents_name || null, parents_phone: phone ? Number(phone) : null, parents_email: form.parents_email || null,
       home_address: form.home_address || null, evaluation_type: [...evalTypes, ...extraEvals].join(', ') || null, testing_materials: form.testing_materials || null,
-      reason_for_referral: form.reason_for_referral || null, Report_Due_date: form.Report_Due_date || null, referral_source: form.referral_source || null,
+      reason_for_referral: form.reason_for_referral || null, Report_Due_date: form.Report_Due_date || null, referral_source: form.referral_source.trim() || null, referral_source_contact: form.referral_source_contact.trim() || null,
       Status: form.Status || null,
     }
     const { error } = await supabase.from('Cases').update(patch).eq('id', c.id)
@@ -1949,7 +1992,10 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, qaByAss
           </div>
           <div className="form-group"><label>Testing Materials</label><textarea rows={2} value={form.testing_materials} onChange={e => setF('testing_materials', e.target.value)} /></div>
           <div className="form-group"><label>Reason for Referral</label><textarea rows={2} value={form.reason_for_referral} onChange={e => setF('reason_for_referral', e.target.value)} /></div>
-          <div className="form-group"><label>Referral Source</label><input value={form.referral_source} onChange={e => setF('referral_source', e.target.value)} /></div>
+          <div className="form-row">
+            <div className="form-group"><label>Referral Source</label><input value={form.referral_source} onChange={e => setF('referral_source', e.target.value)} /></div>
+            <div className="form-group"><label>Referral Source Contact Info</label><input value={form.referral_source_contact} placeholder="Phone and/or email" onChange={e => setF('referral_source_contact', e.target.value)} /></div>
+          </div>
         </div>
       ) : (
         <div className="card" style={{ marginBottom: 14 }}>
@@ -1979,6 +2025,7 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, qaByAss
             <Meta k="Case Manager" v={c.case_manager_name} />
             <Meta k="Case Mgr Phone" v={c.case_manager_phone} />
             <Meta k="Referral Source" v={c.referral_source} />
+            <Meta k="Referral Source Contact" v={c.referral_source_contact} />
           </div>
           <div className="alert alert-info" style={{ marginTop: 14, marginBottom: 0, alignItems: 'center', flexWrap: 'wrap' }}>
             📎 <span style={{ flex: 1, minWidth: 200 }}>
