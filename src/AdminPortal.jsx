@@ -51,8 +51,9 @@ async function autoRecordInvoice(caseRow, approvedCount) {
   if (seqErr) return { error: seqErr.message }
   const invoice_number = `${caseRow.case_number || caseRow.id}-${seq}`
 
-  const { data: existing } = await supabase.from('Invoices').select('id').eq('invoice_number', invoice_number).maybeSingle()
-  if (existing) return { skipped: 'already recorded', invoice_number }
+  // Already on file for this case (under this number, or one the office since edited by hand)?
+  const { data: existing } = await supabase.from('Invoices').select('id, invoice_number').eq('case_id', caseRow.id).limit(1)
+  if (existing?.length) return { skipped: 'already recorded', invoice_number: existing[0].invoice_number || invoice_number }
 
   const rate = await getRate(caseRow.Language)
   const amount = Math.max(Number(approvedCount) || 0, 1) * rate
@@ -248,6 +249,26 @@ function DateEdit({ value, onSave, onCancel, disabled, style }) {
       onBlur={commit}
       title="Type the date, then press Enter to save (Esc to cancel)"
       style={{ padding: '2px 4px', fontSize: 12, ...(style || {}) }} />
+  )
+}
+
+// Same idea as DateEdit for a short text value: Enter or clicking away saves, Esc cancels.
+function TextEdit({ value, onSave, onCancel, disabled, style }) {
+  const [v, setV] = useState(value || '')
+  const done = useRef(false)
+  const commit = () => { if (done.current) return; done.current = true; onSave(v) }
+  return (
+    <input autoFocus value={v} disabled={disabled}
+      onChange={e => setV(e.target.value)}
+      onFocus={e => e.target.select()}
+      onClick={e => e.stopPropagation()}
+      onKeyDown={e => {
+        if (e.key === 'Enter') { e.preventDefault(); commit() }
+        if (e.key === 'Escape') { e.preventDefault(); done.current = true; onCancel() }
+      }}
+      onBlur={commit}
+      title="Press Enter to save (Esc to cancel)"
+      style={{ padding: '2px 4px', fontSize: 13, ...(style || {}) }} />
   )
 }
 
@@ -2541,6 +2562,7 @@ function InvoiceList({ invoices, cases, onChanged }) {
   const [confirmDel, setConfirmDel] = useState(null)
   const [q, setQ] = useState('')
   const [districtSel, setDistrictSel] = useState('')
+  const [numEdit, setNumEdit] = useState(null)   // id of the invoice whose # is being edited in place
 
   const caseById = useMemo(() => new Map(cases.map(c => [c.id, c])), [cases])
 
@@ -2647,6 +2669,29 @@ function InvoiceList({ invoices, cases, onChanged }) {
     onChanged()
   }
 
+  // Click-to-edit invoice # straight in the table (no need to open the full row editor).
+  async function saveNumber(inv, raw) {
+    const next = (raw || '').trim()
+    setNumEdit(null)
+    if (next === (inv.invoice_number || '') || (!next && !inv.invoice_number)) return
+    if (!next) { setMsg({ kind: 'warn', text: 'Invoice # can’t be blank — the old number was kept.' }); return }
+    setBusy(true); setMsg(null)
+    const { error } = await supabase.from('Invoices').update({ invoice_number: next }).eq('id', inv.id)
+    setBusy(false)
+    if (error) {
+      const dup = /duplicate|unique/i.test(error.message)
+      setMsg({ kind: 'danger', text: dup ? `Invoice # ${next} is already used by another invoice — the old number was kept.` : error.message })
+      return
+    }
+    // Heads-up (not a block) when the last 4 digits repeat within the same district.
+    const tail = s => (String(s || '').match(/-(\d+)$/) || [])[1]
+    const clash = tail(next) && mapped.find(r => r.id !== inv.id && r._district === inv._district && tail(r._number) === tail(next))
+    setMsg(clash
+      ? { kind: 'warn', text: `Saved ${next}. Note: ${clash._number} (${clash._student}) in ${inv._district || 'this district'} also ends in ${tail(next)}.` }
+      : { kind: 'success', text: `Invoice # changed to ${next}.` })
+    onChanged()
+  }
+
   async function remove(inv) {
     setBusy(true)
     const { error } = await supabase.from('Invoices').delete().eq('id', inv.id)
@@ -2701,7 +2746,14 @@ function InvoiceList({ invoices, cases, onChanged }) {
               ) : (
                 <Fragment key={inv.id}>
                   <tr>
-                    <td style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>{inv._number}</td>
+                    <td style={{ fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', cursor: numEdit === inv.id ? 'default' : 'text' }}
+                      title={numEdit === inv.id ? undefined : 'Click to edit the invoice #'}
+                      onClick={() => { if (numEdit !== inv.id) { setNumEdit(inv.id); setMsg(null) } }}>
+                      {numEdit === inv.id
+                        ? <TextEdit value={inv.invoice_number || (inv._number === '—' ? '' : inv._number)} disabled={busy} style={{ width: 130 }}
+                            onSave={v => saveNumber(inv, v)} onCancel={() => setNumEdit(null)} />
+                        : inv._number}
+                    </td>
                     <td>{inv._student}</td>
                     <td>{inv.district_name || '—'}</td>
                     <td style={{ fontVariantNumeric: 'tabular-nums' }}>${Number(inv.amount || 0).toLocaleString()}</td>
