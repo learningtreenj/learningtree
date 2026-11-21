@@ -2589,6 +2589,12 @@ function InvoiceList({ invoices, cases, onChanged }) {
       if (districtSel && r._district !== districtSel) return false
       if (needle && ![r._number, r._student, r._district, r.status].some(v => String(v || '').toLowerCase().includes(needle))) return false
       return true
+    // Newest first; invoices issued the same day read in invoice-number order (highest suffix on top).
+    }).sort((a, b) => {
+      const d = String(b.issued_date || '').localeCompare(String(a.issued_date || ''))
+      if (d) return d
+      const tail = r => Number((String(r._number).match(/-(\d+)$/) || [])[1] || 0)
+      return tail(b) - tail(a) || String(b._number).localeCompare(String(a._number))
     })
   }, [mapped, q, districtSel])
 
