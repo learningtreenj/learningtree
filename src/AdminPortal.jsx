@@ -747,13 +747,9 @@ function NewReferral({ onCreated }) {
       setMsg({ kind: 'warn', text: 'Student name, district, and report due date are required.' }); return
     }
     // Referral source + its contact info are typed in by the office (never auto-filled
-    // from the uploaded form) and must be present before a case can be created.
-    const missingSrc = [
-      !f.referral_source.trim() && 'referral source',
-      !f.referral_source_contact.trim() && 'referral source contact info',
-    ].filter(Boolean)
-    if (missingSrc.length) {
-      setMsg({ kind: 'warn', text: `Please enter the ${missingSrc.join(' and ')} before creating the case.` })
+    // from the uploaded form). The source is required; the contact info is optional.
+    if (!f.referral_source.trim()) {
+      setMsg({ kind: 'warn', text: 'Please enter the referral source before creating the case.' })
       setSrcMissing(true)
       srcRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
       return
@@ -783,7 +779,7 @@ function NewReferral({ onCreated }) {
       reason_for_referral: f.reason_for_referral || null,
       Report_Due_date: f.Report_Due_date || null,
       referral_source: f.referral_source.trim(),
-      referral_source_contact: f.referral_source_contact.trim(),
+      referral_source_contact: f.referral_source_contact.trim() || null,
       Status: 'Unassigned',
       created_date: new Date().toISOString().slice(0, 10),
     }
@@ -1022,9 +1018,8 @@ function NewReferral({ onCreated }) {
             style={srcMissing && !f.referral_source.trim() ? { borderColor: 'var(--red, #dc2626)' } : undefined}
             onChange={e => set('referral_source', e.target.value)} />
         </div>
-        <div className="form-group"><label>Referral Source Contact Info *</label>
-          <input value={f.referral_source_contact} placeholder="Phone and/or email"
-            style={srcMissing && !f.referral_source_contact.trim() ? { borderColor: 'var(--red, #dc2626)' } : undefined}
+        <div className="form-group"><label>Referral Source Contact Info</label>
+          <input value={f.referral_source_contact} placeholder="Phone and/or email (optional)"
             onChange={e => set('referral_source_contact', e.target.value)} />
         </div>
       </div>
