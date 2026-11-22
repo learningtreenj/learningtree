@@ -2689,11 +2689,13 @@ function InvoiceList({ invoices, cases, onChanged }) {
       setMsg({ kind: 'danger', text: dup ? `Invoice # ${next} is already used by another invoice — the old number was kept.` : error.message })
       return
     }
-    // Heads-up (not a block) when the last 4 digits repeat within the same district.
+    // Heads-up (not a block) when the last 4 digits repeat within the same district and year
+    // (each district's sequence restarts at 1000 every January).
     const tail = s => (String(s || '').match(/-(\d+)$/) || [])[1]
-    const clash = tail(next) && mapped.find(r => r.id !== inv.id && r._district === inv._district && tail(r._number) === tail(next))
+    const yr = r => String(r.issued_date || '').slice(0, 4)
+    const clash = tail(next) && mapped.find(r => r.id !== inv.id && r._district === inv._district && yr(r) === yr(inv) && tail(r._number) === tail(next))
     setMsg(clash
-      ? { kind: 'warn', text: `Saved ${next}. Note: ${clash._number} (${clash._student}) in ${inv._district || 'this district'} also ends in ${tail(next)}.` }
+      ? { kind: 'warn', text: `Saved ${next}. Note: ${clash._number} (${clash._student}) in ${inv._district || 'this district'} also ends in ${tail(next)}${yr(inv) ? ` in ${yr(inv)}` : ''}.` }
       : { kind: 'success', text: `Invoice # changed to ${next}.` })
     onChanged()
   }
