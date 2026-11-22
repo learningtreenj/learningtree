@@ -7,7 +7,7 @@ function isoDate(d) {
   return s.length >= 10 ? s.slice(0, 10) : s
 }
 
-export function buildCasesWorkbook(cases, assignments) {
+export function buildCasesWorkbook(cases, assignments, paidByCase) {
   // One row per assignment, grouped under its case
   const asgByCase = {}
   for (const a of assignments) {
@@ -28,6 +28,7 @@ export function buildCasesWorkbook(cases, assignments) {
       'District': c.School_district || '',
       'County': c.County || '',
       'Status': c.Status || '',
+      'Invoice Paid': (() => { const p = paidByCase?.get(c.id); return p ? (p.date || 'Paid') : '' })(),
       'Report Due Date': isoDate(c.Report_Due_date),
       'Eval Types Requested': c.evaluation_type || '',
       'Testing Materials': c.testing_materials || '',
@@ -131,8 +132,8 @@ export function exportEvaluatorYearToExcel(name, year, lines) {
   XLSX.writeFile(wb, `learning-tree-${safe}-${year}.xlsx`)
 }
 
-export function exportCasesToExcel(cases, assignments) {
-  const wb = buildCasesWorkbook(cases, assignments)
+export function exportCasesToExcel(cases, assignments, paidByCase) {
+  const wb = buildCasesWorkbook(cases, assignments, paidByCase)
   const today = new Date().toISOString().slice(0, 10)
   XLSX.writeFile(wb, `learning-tree-cases-${today}.xlsx`)
 }

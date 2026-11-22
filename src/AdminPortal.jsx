@@ -370,7 +370,7 @@ export default function AdminPortal({ user }) {
         onOpenCase={c => { setSelectedCase(c); setScreen('casedetail') }} cases={cases} earnings={earnings} contractors={contractors}
         onLanguage={lang => { setContractorLang(lang); setScreen('contractors') }} />}
       {screen === 'referral' && <NewReferral onCreated={c => { load(); setSelectedCase(c); setScreen('casedetail') }} />}
-      {screen === 'cases' && <CaseList cases={cases} assignments={assignments} contractors={contractors} earnings={earnings} batches={batches} loading={loading}
+      {screen === 'cases' && <CaseList cases={cases} assignments={assignments} contractors={contractors} earnings={earnings} batches={batches} invoices={invoices} loading={loading}
         onOpen={c => { setSelectedCase(c); setScreen('casedetail') }} onChanged={load} />}
       {screen === 'casedetail' && selectedCase && <CaseDetail caseRow={selectedCase} assignments={assignments.filter(a => a.case_id === selectedCase.id)}
         allAssignments={assignments} contractors={contractors} qaByAssignment={qaByAssignment} earnings={earnings} onBack={() => setScreen('cases')} onChanged={load} />}
@@ -1130,7 +1130,25 @@ function paidBtnStyle(isYes, active) {
     : { ...base, background: '#fff', borderColor: '#efd2d4', color: '#c79a9d' }
 }
 
-function CaseList({ cases, assignments, contractors = [], earnings = [], batches = [], loading, onOpen, onChanged }) {
+// case id -> { date } for every case whose invoice has been paid. `date` is the day the
+// district's payment was received ('' when the invoice is marked Paid with no date yet).
+function invoicePaidByCase(cases, invoices) {
+  const m = new Map()
+  for (const inv of invoices || []) {
+    if (inv.case_id == null) continue
+    const d = inv.paid_date ? String(inv.paid_date).slice(0, 10) : ''
+    if ((inv.status || '').toLowerCase() !== 'paid' && !d) continue
+    const cur = m.get(inv.case_id)
+    if (!cur || d > cur.date) m.set(inv.case_id, { date: d })
+  }
+  // Payment date typed on the Payroll ledger for a case that has no invoice on file.
+  for (const c of cases || []) {
+    if (!m.has(c.id) && c.district_payment_date) m.set(c.id, { date: String(c.district_payment_date).slice(0, 10) })
+  }
+  return m
+}
+
+function CaseList({ cases, assignments, contractors = [], earnings = [], batches = [], invoices = [], loading, onOpen, onChanged }) {
   const [q, setQ] = useState('')
   const [chip, setChip] = useState('active')
   const [expanded, setExpanded] = useState({})
@@ -1189,66 +1207,10 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
   // Cases due soon / overdue — shown as the red counter on the "Due Soon" chip (and the sidebar).
   const dueSoonCount = useMemo(() => cases.filter(c => caseDueSoon(c, byCase[c.id] || [])).length, [cases, byCase])
 
-  // Manually mark whether the school district has paid Learning Tree for a case.
-  // ── Mail Date: Excel-style select / copy / paste across rows ──
-  const [mailSel, setMailSel] = useState(new Set()) // selected case ids
-  const [mailActive, setMailActive] = useState(null) // anchor case id
-  const [mailClip, setMailClip] = useState(null)     // copied date (ISO) or null
-  const [editMailId, setEditMailId] = useState(null) // case whose date is being typed
-  const [mailOverride, setMailOverride] = useState({}) // instant display after a write
-  const mailVal = c => (c.id in mailOverride ? mailOverride[c.id] : (c.mail_date ? String(c.mail_date).slice(0, 10) : ''))
-
-  async function writeMailDates(ids, val) {
-    if (!ids.length) return
-    setMailOverride(prev => { const n = { ...prev }; ids.forEach(id => { n[id] = val || '' }); return n })
-    setRowBusy(true); setRowMsg(null)
-    const { error } = await supabase.from('Cases').update({ mail_date: val || null }).in('id', ids)
-    if (error) setRowMsg({ kind: 'danger', text: error.message })
-    else setRowMsg({ kind: 'success', text: `Mail date ${val ? `set for ${ids.length} case${ids.length === 1 ? '' : 's'}` : 'cleared'}.` })
-    onChanged && onChanged(); setRowBusy(false)
-  }
-
-  function mailCellClick(e, c, orderedIds) {
-    e.stopPropagation()
-    if (e.shiftKey && mailActive != null) {
-      const a = orderedIds.indexOf(mailActive), b = orderedIds.indexOf(c.id)
-      if (a !== -1 && b !== -1) {
-        const [lo, hi] = a < b ? [a, b] : [b, a]
-        setMailSel(new Set(orderedIds.slice(lo, hi + 1)))
-      }
-    } else if (e.ctrlKey || e.metaKey) {
-      setMailSel(prev => { const n = new Set(prev); n.has(c.id) ? n.delete(c.id) : n.add(c.id); return n })
-      setMailActive(c.id)
-    } else {
-      setMailSel(new Set([c.id])); setMailActive(c.id)
-    }
-  }
-
-  // Keyboard: copy / paste / fill / clear the mail-date selection.
-  useEffect(() => {
-    function onKey(e) {
-      const t = e.target
-      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT')) return
-      if (!mailSel.size) return
-      const meta = e.ctrlKey || e.metaKey
-      const key = e.key.toLowerCase()
-      if (meta && key === 'c') {
-        const src = mailActive != null ? cases.find(c => c.id === mailActive) : null
-        const v = src ? mailVal(src) : ''
-        setMailClip(v); try { navigator.clipboard.writeText(fmtDate(v) || '') } catch { /* ignore */ }
-        setRowMsg({ kind: 'info', text: v ? `Copied ${fmtDate(v)}` : 'Copied (blank)' }); e.preventDefault()
-      } else if (meta && key === 'v') {
-        if (mailClip != null) writeMailDates([...mailSel], mailClip); e.preventDefault()
-      } else if (meta && key === 'd') {
-        const src = mailActive != null ? cases.find(c => c.id === mailActive) : null
-        writeMailDates([...mailSel], src ? mailVal(src) : ''); e.preventDefault()
-      } else if (key === 'delete' || key === 'backspace') {
-        writeMailDates([...mailSel], ''); e.preventDefault()
-      }
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [mailSel, mailActive, mailClip, cases, mailOverride])
+  // Invoice Paid column: the date the district's payment was received, taken from the case's
+  // invoice in Client Invoices (edited there). Falls back to the date typed on the Payroll ledger.
+  const paidByCase = useMemo(() => invoicePaidByCase(cases, invoices), [cases, invoices])
+  const paidInfo = c => paidByCase.get(c.id) || null   // { date: ISO | '' } when paid, else null
 
   // ── Inline due-date editing ──
   const [editDueId, setEditDueId] = useState(null)
@@ -1318,7 +1280,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
 
   // Non-eval columns keep the sort/filter menus. Eval types are their own fixed columns.
   const LEFT_COLS = [['case_number', 'Case #'], ['Student_name', 'Student'], ['Language', 'Language'], ['School_district', 'District']]
-  const RIGHT_COLS = [['created_date', 'Date Added'], ['Report_Due_date', 'Due Date'], ['status', 'Status'], ['mail_date', 'Mail Date']]
+  const RIGHT_COLS = [['created_date', 'Date Added'], ['Report_Due_date', 'Due Date'], ['status', 'Status'], ['invoice_paid', 'Invoice Paid']]
   const CHECKBOX_COLS = { School_district: true, Language: true, status: true }
   const districtOptions = useMemo(() => [...new Set(cases.map(c => (c.School_district || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [cases])
   const languageOptions = useMemo(() => [...new Set(cases.map(c => (c.Language || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [cases])
@@ -1358,7 +1320,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
       case 'Report_Due_date': return c.Report_Due_date || ''       // ISO date sorts lexically
       case 'assignments': return asg.length                        // numeric
       case 'status': return caseProgressText(c, asg).toLowerCase()
-      case 'mail_date': return c.mail_date || ''
+      case 'invoice_paid': { const p = paidInfo(c); return p ? (p.date || '0000-00-00') : '' }  // unpaid sorts first, then paid-without-date, then by date
       case 'case_number': return String(c.case_number ?? '').toLowerCase()
       case 'Student_name': return String(c.Student_name ?? '').toLowerCase()
       case 'Language': return String(c.Language ?? '').toLowerCase()
@@ -1371,7 +1333,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
     const asg = byCase[c.id] || []
     if (col === 'assignments') return asg.map(a => `${a.eval_type || ''} ${a.Contractors?.name || ''}`).join(' ').toLowerCase()
     if (col === 'created_date') return `${c.created_date || ''} ${fmtDate(c.created_date)}`.toLowerCase()
-    if (col === 'mail_date') return `${c.mail_date || ''} ${fmtDate(c.mail_date)}`.toLowerCase()
+    if (col === 'invoice_paid') { const p = paidInfo(c); return p ? `paid ${p.date} ${fmtDate(p.date) || ''}`.toLowerCase() : 'unpaid' }
     if (col === 'Report_Due_date') return `${c.Report_Due_date || ''} ${fmtDate(c.Report_Due_date)}`.toLowerCase()
     return String(colSortVal(col, c)).toLowerCase()
   }
@@ -1407,9 +1369,8 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
     })
   }
 
-  // Visible rows (capped) and their id order — used for shift-click ranges on Mail Date.
+  // Visible rows (capped).
   const visibleRows = rows.slice(0, 200)
-  const orderedMailIds = visibleRows.map(c => c.id)
 
   // A sortable/filterable header cell (used for the non-eval columns).
   const menuTh = (key, label) => (
@@ -1472,7 +1433,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
           ))}
           <button className="btn btn-secondary btn-sm" title="Download all cases and assignments as an Excel workbook"
             disabled={cases.length === 0}
-            onClick={() => exportCasesToExcel(cases, assignments)}>
+            onClick={() => exportCasesToExcel(cases, assignments, paidByCase)}>
             ⬇ Export to Excel
           </button>
         </div>
@@ -1492,7 +1453,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
           </span>
         ))}
         <span style={{ color: 'var(--muted)', marginLeft: 'auto' }}>
-          <b style={{ color: '#555' }}>Mail Date:</b> click to select · Shift/Ctrl-click for many · double-click to set · Ctrl+C / Ctrl+V to copy across
+          <b style={{ color: '#555' }}>Invoice Paid:</b> date the district's payment was received — set it in Client Invoices
         </span>
       </div>
       <div className="tbl-wrap sticky-head">
@@ -1559,26 +1520,14 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
                       : <span className="tbl-link" title="Click to edit due date" onClick={() => setEditDueId(c.id)}>{fmtDate(c.Report_Due_date) || 'Set date'}</span>}
                   </td>
                   <td><span className={`badge-s ${progress === 'Complete' ? 's-completed' : 's-drafting'}`}>{progress}</span></td>
-                  <td style={{ whiteSpace: 'nowrap', padding: '6px 8px' }}
-                    onClick={e => { if (editMailId !== c.id) mailCellClick(e, c, orderedMailIds) }}>
-                    {editMailId === c.id ? (
-                      <DateEdit value={mailVal(c)} disabled={rowBusy}
-                        onSave={v => { setEditMailId(null); if (v !== mailVal(c)) writeMailDates([c.id], v) }} onCancel={() => setEditMailId(null)} />
-                    ) : (
-                      <span
-                        onDoubleClick={e => { e.stopPropagation(); setEditMailId(c.id) }}
-                        title="Click to select · double-click to set a date · copy/paste across selected cells"
-                        style={{
-                          display: 'inline-block', minWidth: 92, textAlign: 'center', cursor: 'cell',
-                          padding: '3px 8px', borderRadius: 6, fontSize: 12.5, fontVariantNumeric: 'tabular-nums',
-                          border: `1px solid ${mailSel.has(c.id) ? 'var(--accent)' : 'var(--border)'}`,
-                          background: mailSel.has(c.id) ? 'var(--accent-light)' : '#fff',
-                          boxShadow: mailActive === c.id ? 'inset 0 0 0 1px var(--accent)' : 'none',
-                          color: mailVal(c) ? '#1c2330' : '#9aa1ab',
-                        }}>
-                        {mailVal(c) ? fmtDate(mailVal(c)) : '— set'}
-                      </span>
-                    )}
+                  <td style={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>
+                    {(() => {
+                      const p = paidInfo(c)
+                      if (!p) return <span style={{ color: 'var(--muted)' }}>—</span>
+                      return p.date
+                        ? <span title="Invoice paid — date the payment was received" style={{ color: '#1a7a3c', fontWeight: 600 }}>{fmtDate(p.date)}</span>
+                        : <span title="Invoice is marked Paid but no payment date has been entered — set it in Client Invoices" style={{ color: '#1a7a3c' }}>Paid · no date</span>
+                    })()}
                   </td>
                 </tr>
               )
@@ -2558,6 +2507,7 @@ function InvoiceList({ invoices, cases, onChanged }) {
   const [q, setQ] = useState('')
   const [districtSel, setDistrictSel] = useState('')
   const [numEdit, setNumEdit] = useState(null)   // id of the invoice whose # is being edited in place
+  const [paidEdit, setPaidEdit] = useState(null) // id of the invoice whose paid date is being edited in place
 
   const caseById = useMemo(() => new Map(cases.map(c => [c.id, c])), [cases])
 
@@ -2646,6 +2596,7 @@ function InvoiceList({ invoices, cases, onChanged }) {
       issued_date: inv.issued_date || '',
       due_date: inv.due_date || '',
       status: inv.status || 'Draft',
+      paid_date: inv.paid_date ? String(inv.paid_date).slice(0, 10) : '',
     })
   }
 
@@ -2659,6 +2610,8 @@ function InvoiceList({ invoices, cases, onChanged }) {
       issued_date: edit.issued_date || null,
       due_date: edit.due_date || null,
       status: edit.status,
+      // Blank + newly Paid → the database stamps today's date.
+      paid_date: edit.status === 'Paid' ? (edit.paid_date || null) : null,
     }).eq('id', id)
     setBusy(false)
     if (error) { setMsg({ kind: 'danger', text: error.message }); return }
@@ -2666,7 +2619,24 @@ function InvoiceList({ invoices, cases, onChanged }) {
   }
 
   async function setStatus(inv, status) {
-    await supabase.from('Invoices').update({ status }).eq('id', inv.id)
+    // Mark Paid records today as the day the payment was received; click the date to correct it.
+    const patch = status === 'Paid' ? { status, paid_date: todayISO() } : { status }
+    const { error } = await supabase.from('Invoices').update(patch).eq('id', inv.id)
+    if (error) setMsg({ kind: 'danger', text: error.message })
+    else if (status === 'Paid') setMsg({ kind: 'success', text: `Invoice ${inv._number} marked paid — payment received ${fmtDate(patch.paid_date)}. Click the paid date to change it.` })
+    onChanged()
+  }
+
+  // Click-to-edit "payment received" date. Entering a date on an unpaid invoice marks it Paid.
+  async function savePaidDate(inv, val) {
+    setPaidEdit(null)
+    const cur = inv.paid_date ? String(inv.paid_date).slice(0, 10) : ''
+    if ((val || '') === cur) return
+    setBusy(true); setMsg(null)
+    const { error } = await supabase.from('Invoices').update({ paid_date: val || null }).eq('id', inv.id)
+    setBusy(false)
+    if (error) { setMsg({ kind: 'danger', text: error.message }); return }
+    setMsg({ kind: 'success', text: val ? `Invoice ${inv._number}: payment received ${fmtDate(val)}.` : `Paid date cleared for invoice ${inv._number}.` })
     onChanged()
   }
 
@@ -2726,9 +2696,9 @@ function InvoiceList({ invoices, cases, onChanged }) {
         {msg && <div className={`alert alert-${msg.kind}`}>{msg.text}</div>}
         <div className="tbl-wrap">
           <table>
-            <thead><tr><th style={{ whiteSpace: 'nowrap', minWidth: 120 }}>Invoice #</th><th>Student</th><th>District</th><th>Amount</th><th>Issued</th><th>Status</th><th></th></tr></thead>
+            <thead><tr><th style={{ whiteSpace: 'nowrap', minWidth: 120 }}>Invoice #</th><th>Student</th><th>District</th><th>Amount</th><th>Issued</th><th>Status</th><th style={{ whiteSpace: 'nowrap' }}>Paid On</th><th></th></tr></thead>
             <tbody>
-              {rows.length === 0 && <tr><td colSpan={7} style={{ color: '#888' }}>{invoices.length === 0 ? 'No invoices yet — one is recorded automatically when every report on a case is approved in QA.' : 'No invoices match that search.'}</td></tr>}
+              {rows.length === 0 && <tr><td colSpan={8} style={{ color: '#888' }}>{invoices.length === 0 ? 'No invoices yet — one is recorded automatically when every report on a case is approved in QA.' : 'No invoices match that search.'}</td></tr>}
               {rows.map(inv => editId === inv.id ? (
                 <tr key={inv.id}>
                   <td><input value={edit.invoice_number} onChange={e => setEdit(p => ({ ...p, invoice_number: e.target.value }))} style={{ width: 130 }} /></td>
@@ -2741,6 +2711,9 @@ function InvoiceList({ invoices, cases, onChanged }) {
                       {['Draft', 'Sent', 'Paid'].map(s => <option key={s}>{s}</option>)}
                     </select>
                   </td>
+                  <td><input type="date" value={edit.status === 'Paid' ? edit.paid_date : ''} disabled={edit.status !== 'Paid'}
+                    title={edit.status === 'Paid' ? 'Date the payment was received (blank = today)' : 'Set the status to Paid to enter a date'}
+                    onChange={e => setEdit(p => ({ ...p, paid_date: e.target.value }))} /></td>
                   <td style={{ whiteSpace: 'nowrap' }}>
                     <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => saveEdit(inv.id)}>Save</button>{' '}
                     <button className="btn btn-ghost btn-sm" onClick={() => setEditId(null)}>Cancel</button>
@@ -2762,6 +2735,16 @@ function InvoiceList({ invoices, cases, onChanged }) {
                     <td style={{ fontVariantNumeric: 'tabular-nums' }}>${Number(inv.amount || 0).toLocaleString()}</td>
                     <td>{fmtDate(inv.issued_date)}</td>
                     <td><Badge status={inv.status} /></td>
+                    <td style={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums', cursor: paidEdit === inv.id ? 'default' : 'pointer' }}
+                      title={paidEdit === inv.id ? undefined : ((inv.status || '').toLowerCase() === 'paid' ? 'Click to edit the date the payment was received' : 'Click to enter the date the payment was received (marks the invoice Paid)')}
+                      onClick={() => { if (paidEdit !== inv.id) { setPaidEdit(inv.id); setMsg(null) } }}>
+                      {paidEdit === inv.id
+                        ? <DateEdit value={inv.paid_date ? String(inv.paid_date).slice(0, 10) : ''} disabled={busy}
+                            onSave={v => savePaidDate(inv, v)} onCancel={() => setPaidEdit(null)} />
+                        : inv.paid_date ? fmtDate(inv.paid_date)
+                        : (inv.status || '').toLowerCase() === 'paid' ? <span className="tbl-link">Set date</span>
+                        : <span style={{ color: 'var(--muted)' }}>—</span>}
+                    </td>
                     <td style={{ whiteSpace: 'nowrap' }}>
                       <button className="btn btn-secondary btn-sm" onClick={() => startEdit(inv)}>✏️ Edit</button>{' '}
                       {(inv.status || '').toLowerCase() !== 'paid' && (
@@ -2771,7 +2754,7 @@ function InvoiceList({ invoices, cases, onChanged }) {
                     </td>
                   </tr>
                   {confirmDel === inv.id && (
-                    <tr><td colSpan={7}>
+                    <tr><td colSpan={8}>
                       <div className="alert alert-danger" style={{ margin: 0 }}>
                         <strong>Delete invoice {inv._number}?</strong> This removes it from the register permanently. The case and its reports are not affected.{' '}
                         <button className="btn btn-danger btn-sm" disabled={busy} onClick={() => remove(inv)}>Delete</button>{' '}
