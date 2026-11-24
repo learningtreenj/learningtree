@@ -1302,10 +1302,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
     if ((a.status || '').toLowerCase() === 'submitted') return { t: "Report Rec'd", cls: 's-completed' }
     const acc = (a.acceptance_status || 'pending').toLowerCase()
     if (acc === 'declined') return { t: 'Declined', cls: 's-overdue' }
-    if (acc !== 'accepted') {
-      const d = daysWaiting(a)
-      return { t: d !== null ? `Awaiting Acceptance · ${d}d` : 'Awaiting Acceptance', cls: 's-pending' }
-    }
+    if (acc !== 'accepted') return { t: 'Awaiting Acceptance', cls: 's-pending', days: daysWaiting(a) }
     return { t: 'Assigned', cls: 's-assigned' }
   }
   const toggleCheck = (key, val) => setColChecks(p => {
@@ -1505,7 +1502,17 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
                               return (
                                 <div key={a.id} style={{ marginBottom: cAsg.length > 1 ? 4 : 0 }}>
                                   <div>{prefix}{a.Contractors?.name || 'Assigned'}</div>
-                                  <span className={`badge-s ${st.cls}`} style={{ fontSize: 10 }}>{st.t}</span>
+                                  <span className={`badge-s ${st.cls}`} style={{ fontSize: 10, ...(st.days != null ? { position: 'relative', marginRight: 10, marginTop: 4 } : {}) }}>
+                                    {st.t}
+                                    {st.days != null && (
+                                      <span title={`${st.days} day${st.days === 1 ? '' : 's'} since the assignment email went out (${fmtDate(a.assignment_email_sent_at)})`}
+                                        style={{
+                                          position: 'absolute', top: -9, right: -11, minWidth: 18, height: 18, padding: '0 4px', boxSizing: 'border-box',
+                                          borderRadius: 9, background: '#e53935', color: '#fff', fontSize: 10, fontWeight: 700, lineHeight: '18px',
+                                          textAlign: 'center', boxShadow: '0 0 0 2px #fff, 0 1px 3px rgba(0,0,0,.3)',
+                                        }}>{st.days}</span>
+                                    )}
+                                  </span>
                                 </div>
                               )
                             })}
