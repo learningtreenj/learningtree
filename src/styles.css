@@ -61,6 +61,8 @@ nav { flex: 1; padding: 8px 0; overflow-y: auto; }
 /* ── STAT CARDS ── */
 .stat-grid { display: grid; gap: 12px; margin-bottom: 18px; }
 .stat-grid-4 { grid-template-columns: repeat(4,1fr); }
+.stat-grid-5 { grid-template-columns: repeat(5,1fr); }
+@media (max-width: 900px) { .stat-grid-5 { grid-template-columns: repeat(2,1fr); } }
 .stat-grid-3 { grid-template-columns: repeat(3,1fr); }
 .stat-card { background: #fff; border: 1px solid var(--border); border-radius: 6px; padding: 14px 16px; }
 .stat-card .num { font-size: 26px; font-weight: 800; }

@@ -545,6 +545,9 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
   const awaitingList = openAssignments.filter(a => /testing complet|draft/i.test(a.status || ''))
   const awaiting = awaitingList.length
   const overdue = openAssignments.filter(a => { const n = daysLeft(a.report_due_date); return n !== null && n < 0 })
+  // Evaluator assigned but hasn't accepted or declined yet (same rule as the Cases tab badge).
+  const acceptanceList = openAssignments.filter(a => a.contractor_id && (a.status || '').toLowerCase() !== 'submitted' &&
+    !['accepted', 'declined'].includes((a.acceptance_status || 'pending').toLowerCase()))
 
   // Click a stat (or the overdue banner) to list the assignments behind the number.
   const [drill, setDrill] = useState(null)
@@ -555,6 +558,9 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
     open: { title: 'Open assignments', items: [...openAssignments].sort(byDue), note: 'Every evaluation not yet submitted, on cases not marked complete.' },
     submitted: { title: 'Submitted this month', items: [...submittedThisMonth].sort((x, y) => (y.submitted_at || '').localeCompare(x.submitted_at || '')), note: `Reports received since the 1st of the month.`, submitted: true },
     awaiting: { title: 'Awaiting reports', items: [...awaitingList].sort(byDue), note: 'Evaluations where testing is done and the report is being written.' },
+    acceptance: { title: 'Awaiting acceptance', acceptance: true,
+      items: [...acceptanceList].sort((x, y) => (daysWaiting(y) ?? -1) - (daysWaiting(x) ?? -1)),
+      note: 'Evaluator assigned but hasn’t accepted or declined yet — longest wait first. Days count from the assignment email; an automatic reminder goes out after 3 business days.' },
   }
   const stat = (key, num, label, color) => (
     <div key={key} onClick={() => setDrill(d => d === key ? null : key)} title={`Click to see the ${label.toLowerCase()}`}
@@ -608,11 +614,12 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
           ⚠️ <span><strong>{overdue.length} assignment{overdue.length > 1 ? 's are' : ' is'} past due.</strong> Click to see {overdue.length > 1 ? 'them' : 'it'}.</span>
         </div>
       )}
-      <div className="stat-grid stat-grid-4">
+      <div className="stat-grid stat-grid-5">
         {stat('due', dueThisWeek.length, 'Due This Week', 'blue')}
         {stat('open', openAssignments.length, 'Open Assignments', 'yellow')}
         {stat('submitted', completedThisMonth, 'Submitted This Month', 'green')}
         {stat('awaiting', awaiting, 'Awaiting Reports', 'orange')}
+        {stat('acceptance', acceptanceList.length, 'Awaiting Acceptance', 'red')}
       </div>
       {drill && DRILLS[drill] && (() => {
         const d = DRILLS[drill]
@@ -624,11 +631,30 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
             </div>
             <div className="tbl-wrap" style={{ maxHeight: 420, overflow: 'auto' }}>
               <table>
-                <thead><tr><th>Case</th><th>Student</th><th>District</th><th>Evaluator</th><th>Evaluation</th><th>{d.submitted ? 'Submitted' : 'Due'}</th>{!d.submitted && <th>Days</th>}<th>Status</th></tr></thead>
+                <thead><tr><th>Case</th><th>Student</th><th>District</th><th>Evaluator</th><th>Evaluation</th>
+                  {d.acceptance
+                    ? <><th>Assigned</th><th>Days Waiting</th><th>Reminder Sent</th></>
+                    : <><th>{d.submitted ? 'Submitted' : 'Due'}</th>{!d.submitted && <th>Days</th>}<th>Status</th></>}</tr></thead>
                 <tbody>
                   {d.items.length === 0 && <tr><td colSpan={8} style={{ color: '#888' }}>Nothing here.</td></tr>}
                   {d.items.map(a => {
                     const n = daysLeft(a.report_due_date)
+                    if (d.acceptance) {
+                      const w = daysWaiting(a)
+                      return (
+                        <tr key={a.id}>
+                          <td><span className="tbl-link" onClick={() => openCaseById(a.case_id)}>{a.Cases?.case_number || a.case_id}</span></td>
+                          <td><span className="tbl-link" onClick={() => openCaseById(a.case_id)}>{a.Cases?.Student_name || '—'}</span></td>
+                          <td>{a.Cases?.School_district || '—'}</td>
+                          <td>{a.Contractors?.name || '—'}</td>
+                          <td>{a.eval_type || '—'}</td>
+                          <td style={{ whiteSpace: 'nowrap' }}>{a.assignment_email_sent_at ? fmtDate(a.assignment_email_sent_at) : '—'}</td>
+                          <td style={{ fontWeight: 700, color: w == null ? 'var(--muted)' : w >= 7 ? 'var(--red)' : w >= 3 ? '#b45309' : undefined }}>
+                            {w == null ? '—' : `${w} day${w === 1 ? '' : 's'}`}</td>
+                          <td style={{ whiteSpace: 'nowrap' }}>{a.acceptance_reminder_sent_at ? fmtDate(a.acceptance_reminder_sent_at) : <span style={{ color: 'var(--muted)' }}>Not yet</span>}</td>
+                        </tr>
+                      )
+                    }
                     return (
                       <tr key={a.id}>
                         <td><span className="tbl-link" onClick={() => openCaseById(a.case_id)}>{a.Cases?.case_number || a.case_id}</span></td>
