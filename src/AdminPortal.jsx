@@ -560,7 +560,7 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
     awaiting: { title: 'Awaiting reports', items: [...awaitingList].sort(byDue), note: 'Evaluations where testing is done and the report is being written.' },
     acceptance: { title: 'Awaiting acceptance', acceptance: true,
       items: [...acceptanceList].sort((x, y) => (daysWaiting(y) ?? -1) - (daysWaiting(x) ?? -1)),
-      note: 'Evaluator assigned but hasn’t accepted or declined yet — longest wait first. Days count from the assignment email; an automatic reminder goes out after 3 business days.' },
+      note: 'Evaluator assigned but hasn’t accepted or declined yet — longest wait first. Days count from the assignment email; the evaluator gets an automatic reminder after 3 business days, and after 7 days it’s escalated to the office by email.' },
   }
   const stat = (key, num, label, color) => (
     <div key={key} onClick={() => setDrill(d => d === key ? null : key)} title={`Click to see the ${label.toLowerCase()}`}
@@ -633,7 +633,7 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
               <table>
                 <thead><tr><th>Case</th><th>Student</th><th>District</th><th>Evaluator</th><th>Evaluation</th>
                   {d.acceptance
-                    ? <><th>Assigned</th><th>Days Waiting</th><th>Reminder Sent</th></>
+                    ? <><th>Assigned</th><th>Days Waiting</th><th>Reminder Sent</th><th>Escalated to Office</th></>
                     : <><th>{d.submitted ? 'Submitted' : 'Due'}</th>{!d.submitted && <th>Days</th>}<th>Status</th></>}</tr></thead>
                 <tbody>
                   {d.items.length === 0 && <tr><td colSpan={8} style={{ color: '#888' }}>Nothing here.</td></tr>}
@@ -652,6 +652,9 @@ function Dashboard({ assignments, openAssignments, dueThisWeek, cases, loading, 
                           <td style={{ fontWeight: 700, color: w == null ? 'var(--muted)' : w >= 7 ? 'var(--red)' : w >= 3 ? '#b45309' : undefined }}>
                             {w == null ? '—' : `${w} day${w === 1 ? '' : 's'}`}</td>
                           <td style={{ whiteSpace: 'nowrap' }}>{a.acceptance_reminder_sent_at ? fmtDate(a.acceptance_reminder_sent_at) : <span style={{ color: 'var(--muted)' }}>Not yet</span>}</td>
+                          <td style={{ whiteSpace: 'nowrap' }}>{a.acceptance_escalated_at
+                            ? <span className="badge-s s-overdue">⚑ {fmtDate(a.acceptance_escalated_at)}</span>
+                            : <span style={{ color: 'var(--muted)' }}>{w != null && w >= 7 ? 'Next weekday run' : '—'}</span>}</td>
                         </tr>
                       )
                     }
