@@ -2544,6 +2544,7 @@ function InvoiceList({ invoices, cases, onChanged }) {
   const [districtSel, setDistrictSel] = useState('')
   const [numEdit, setNumEdit] = useState(null)   // id of the invoice whose # is being edited in place
   const [paidEdit, setPaidEdit] = useState(null) // id of the invoice whose paid date is being edited in place
+  const [sortBy, setSortBy] = useState('issued') // 'issued' (newest first) | 'paid_asc' | 'paid_desc'
 
   const caseById = useMemo(() => new Map(cases.map(c => [c.id, c])), [cases])
 
@@ -2570,14 +2571,23 @@ function InvoiceList({ invoices, cases, onChanged }) {
       if (districtSel && r._district !== districtSel) return false
       if (needle && ![r._number, r._student, r._district, r.status].some(v => String(v || '').toLowerCase().includes(needle))) return false
       return true
-    // Newest first; invoices issued the same day read in invoice-number order (highest suffix on top).
+    // Default: newest issued first; invoices issued the same day read in invoice-number order (highest suffix on top).
+    // Paid On sort: dated payments in date order, then "paid, no date", then unpaid at the bottom.
     }).sort((a, b) => {
+      if (sortBy !== 'issued') {
+        const pd = r => (r.paid_date ? String(r.paid_date).slice(0, 10) : '')
+        const rank = r => pd(r) ? 0 : (r.status || '').toLowerCase() === 'paid' ? 1 : 2
+        const rk = rank(a) - rank(b)
+        if (rk) return rk
+        const d = sortBy === 'paid_asc' ? pd(a).localeCompare(pd(b)) : pd(b).localeCompare(pd(a))
+        if (d) return d
+      }
       const d = String(b.issued_date || '').localeCompare(String(a.issued_date || ''))
       if (d) return d
       const tail = r => Number((String(r._number).match(/-(\d+)$/) || [])[1] || 0)
       return tail(b) - tail(a) || String(b._number).localeCompare(String(a._number))
     })
-  }, [mapped, q, districtSel])
+  }, [mapped, q, districtSel, sortBy])
 
   const totals = useMemo(() => {
     const sum = (pred) => rows.filter(pred).reduce((t, r) => t + Number(r.amount || 0), 0)
@@ -2722,6 +2732,11 @@ function InvoiceList({ invoices, cases, onChanged }) {
               {districtOptions.map(d => <option key={d} value={d}>{d}</option>)}
             </select>
             <input placeholder="Search # / student / district…" value={q} onChange={e => setQ(e.target.value)} style={{ maxWidth: 240 }} />
+            <select value={sortBy} onChange={e => setSortBy(e.target.value)} style={{ maxWidth: 230 }} title="Order of the invoice list">
+              <option value="issued">Sort: Issued (newest first)</option>
+              <option value="paid_asc">Sort: Paid On (oldest → newest)</option>
+              <option value="paid_desc">Sort: Paid On (newest → oldest)</option>
+            </select>
           </div>
         </div>
         <div style={{ display: 'flex', gap: 18, margin: '10px 0 4px', fontSize: 13, color: '#555', flexWrap: 'wrap' }}>
@@ -2732,7 +2747,11 @@ function InvoiceList({ invoices, cases, onChanged }) {
         {msg && <div className={`alert alert-${msg.kind}`}>{msg.text}</div>}
         <div className="tbl-wrap">
           <table>
-            <thead><tr><th style={{ whiteSpace: 'nowrap', minWidth: 120 }}>Invoice #</th><th>Student</th><th>District</th><th>Amount</th><th>Issued</th><th>Status</th><th style={{ whiteSpace: 'nowrap' }}>Paid On</th><th></th></tr></thead>
+            <thead><tr><th style={{ whiteSpace: 'nowrap', minWidth: 120 }}>Invoice #</th><th>Student</th><th>District</th><th>Amount</th><th>Issued</th><th>Status</th>
+              <th style={{ whiteSpace: 'nowrap', cursor: 'pointer', userSelect: 'none' }} title="Click to sort by the date payment was received"
+                onClick={() => setSortBy(s => s === 'paid_asc' ? 'paid_desc' : s === 'paid_desc' ? 'issued' : 'paid_asc')}>
+                Paid On {sortBy === 'paid_asc' ? '▲' : sortBy === 'paid_desc' ? '▼' : <span style={{ color: '#c9ccd1' }}>⇅</span>}
+              </th><th></th></tr></thead>
             <tbody>
               {rows.length === 0 && <tr><td colSpan={8} style={{ color: '#888' }}>{invoices.length === 0 ? 'No invoices yet — one is recorded automatically when every report on a case is approved in QA.' : 'No invoices match that search.'}</td></tr>}
               {rows.map(inv => editId === inv.id ? (
