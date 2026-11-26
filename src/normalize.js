@@ -22,7 +22,7 @@ export function cleanDistrict(raw) {
   return s
 }
 
-// Only the bilingual language(s): "English/Spanish" → "Spanish", "English" → "".
+// Only the bilingual language(s): "English/Spanish" → "Spanish"; English on its own stays "English".
 export function cleanLanguage(raw) {
   if (raw == null) return raw
   const s = String(raw).replace(/\s+/g, ' ').trim()
@@ -30,5 +30,5 @@ export function cleanLanguage(raw) {
   const keep = s.split(/\s*(?:\/|&|,|;|\+|\band\b)\s*/i)
     .map(t => t.replace(/^[\s().-]+|[\s().-]+$/g, ''))
     .filter(t => t && !/^english\b/i.test(t) && t.toLowerCase() !== 'eng')
-  return keep.join('/')
+  return keep.length ? keep.join('/') : 'English'
 }

@@ -893,7 +893,7 @@ function NewReferral({ onCreated }) {
       Student_name: p.Student_name ?? prev.Student_name,
       student_dob: p.student_dob ?? prev.student_dob,
       grade: p.grade_level != null ? normalizeGrade(p.grade_level) : prev.grade,
-      // Proper district name only, and only the bilingual language (never English).
+      // Proper district name only; English is dropped when another language is listed.
       Language: p.Language != null ? cleanLanguage(p.Language) : prev.Language,
       School_district: p.School_district != null ? cleanDistrict(p.School_district) : prev.School_district,
       County: p.County ?? prev.County,
@@ -995,7 +995,7 @@ function NewReferral({ onCreated }) {
             {['Pre-K', 'K', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'].map(g => <option key={g} value={g}>{g}</option>)}
           </select>
         </div>
-        <div className="form-group"><label>Language(s)</label><input placeholder="e.g. Spanish (not English)" value={f.Language} onChange={e => set('Language', e.target.value)} onBlur={e => set('Language', cleanLanguage(e.target.value))} /></div>
+        <div className="form-group"><label>Language(s)</label><input placeholder="e.g. Spanish" value={f.Language} onChange={e => set('Language', e.target.value)} onBlur={e => set('Language', cleanLanguage(e.target.value))} /></div>
       </div>
 
       <SectionHead>Parent / Guardian</SectionHead>
