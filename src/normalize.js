@@ -18,6 +18,8 @@ export function cleanDistrict(raw) {
     s = next
   }
   if (!s) return String(raw).trim()
+  // One district, several names.
+  if (['southorange', 'southorangemaplewood', 'southorangeandmaplewood', 'somsd'].includes(s.toLowerCase().replace(/[^a-z]/g, ''))) return 'South Orange-Maplewood'
   if (s === s.toLowerCase() || s === s.toUpperCase()) s = s.toLowerCase().replace(/\b\w/g, c => c.toUpperCase())
   return s
 }
