@@ -5,6 +5,7 @@ import { generateInvoiceDoc, RATE_PER_EVAL } from './invoice.js'
 import { getRate, invalidateRates, loadRates, rateForLanguage } from './rates.js'
 import DistrictHeatmap from './DistrictHeatmap.jsx'
 import { contractorLanguages, contractorSpeaks } from './contractorLangs.js'
+import { cleanDistrict, cleanLanguage } from './normalize.js'
 import { scoreContractors } from './smartAssign.js'
 import { extractTextFromFile } from './extractDocumentText.js'
 import { exportCasesToExcel, exportPayrollToExcel, exportEvaluatorYearToExcel } from './exportExcel.js'
@@ -892,8 +893,9 @@ function NewReferral({ onCreated }) {
       Student_name: p.Student_name ?? prev.Student_name,
       student_dob: p.student_dob ?? prev.student_dob,
       grade: p.grade_level != null ? normalizeGrade(p.grade_level) : prev.grade,
-      Language: p.Language ?? prev.Language,
-      School_district: p.School_district ?? prev.School_district,
+      // Proper district name only, and only the bilingual language (never English).
+      Language: p.Language != null ? cleanLanguage(p.Language) : prev.Language,
+      School_district: p.School_district != null ? cleanDistrict(p.School_district) : prev.School_district,
       County: p.County ?? prev.County,
       district_contact: p.district_contact ?? prev.district_contact,
       case_manager_name: p.case_manager_name ?? prev.case_manager_name,
@@ -969,7 +971,7 @@ function NewReferral({ onCreated }) {
 
       <SectionHead>District Information</SectionHead>
       <div className="form-row">
-        <div className="form-group"><label>District Name *</label><input value={f.School_district} onChange={e => set('School_district', e.target.value)} /></div>
+        <div className="form-group"><label>District Name *</label><input value={f.School_district} placeholder="e.g. Bordentown (no “School District”)" onChange={e => set('School_district', e.target.value)} onBlur={e => set('School_district', cleanDistrict(e.target.value))} /></div>
         <div className="form-group"><label>County</label><input value={f.County} onChange={e => set('County', e.target.value)} /></div>
       </div>
       <div className="form-row">
@@ -993,7 +995,7 @@ function NewReferral({ onCreated }) {
             {['Pre-K', 'K', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'].map(g => <option key={g} value={g}>{g}</option>)}
           </select>
         </div>
-        <div className="form-group"><label>Language(s)</label><input placeholder="e.g. Spanish" value={f.Language} onChange={e => set('Language', e.target.value)} /></div>
+        <div className="form-group"><label>Language(s)</label><input placeholder="e.g. Spanish (not English)" value={f.Language} onChange={e => set('Language', e.target.value)} onBlur={e => set('Language', cleanLanguage(e.target.value))} /></div>
       </div>
 
       <SectionHead>Parent / Guardian</SectionHead>
@@ -1955,10 +1957,10 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, qaByAss
                 {GRADES.map(g => <option key={g} value={g}>{g}</option>)}
               </select>
             </div>
-            <div className="form-group"><label>Language(s)</label><input value={form.Language} onChange={e => setF('Language', e.target.value)} /></div>
+            <div className="form-group"><label>Language(s)</label><input value={form.Language} onChange={e => setF('Language', e.target.value)} onBlur={e => setF('Language', cleanLanguage(e.target.value))} /></div>
           </div>
           <div className="form-row">
-            <div className="form-group"><label>District *</label><input value={form.School_district} onChange={e => setF('School_district', e.target.value)} /></div>
+            <div className="form-group"><label>District *</label><input value={form.School_district} onChange={e => setF('School_district', e.target.value)} onBlur={e => setF('School_district', cleanDistrict(e.target.value))} /></div>
             <div className="form-group"><label>County</label><input value={form.County} onChange={e => setF('County', e.target.value)} /></div>
           </div>
           <div className="form-row-3">
