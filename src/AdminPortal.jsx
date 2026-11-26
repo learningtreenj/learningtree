@@ -2545,6 +2545,7 @@ function InvoiceList({ invoices, cases, onChanged }) {
   const [numEdit, setNumEdit] = useState(null)   // id of the invoice whose # is being edited in place
   const [paidEdit, setPaidEdit] = useState(null) // id of the invoice whose paid date is being edited in place
   const [sortBy, setSortBy] = useState('issued') // 'issued' (newest first) | 'paid_asc' | 'paid_desc'
+  const [monthSel, setMonthSel] = useState('')    // '' | 'i:YYYY-MM' (issued in) | 'p:YYYY-MM' (paid in)
 
   const caseById = useMemo(() => new Map(cases.map(c => [c.id, c])), [cases])
 
@@ -2565,11 +2566,38 @@ function InvoiceList({ invoices, cases, onChanged }) {
     () => [...new Set(mapped.map(r => r._district).filter(Boolean))].sort((a, b) => a.localeCompare(b)),
     [mapped])
 
-  const rows = useMemo(() => {
+  const ym = d => (d ? String(d).slice(0, 7) : '')
+  const monthLabel = k => k ? new Date(`${k}-01T00:00:00`).toLocaleDateString('en-US', { month: 'long', year: 'numeric' }) : ''
+
+  // District + search filter (no month filter) — the base for the YTD figures.
+  const base = useMemo(() => {
     const needle = q.trim().toLowerCase()
     return mapped.filter(r => {
       if (districtSel && r._district !== districtSel) return false
       if (needle && ![r._number, r._student, r._district, r.status].some(v => String(v || '').toLowerCase().includes(needle))) return false
+      return true
+    })
+  }, [mapped, q, districtSel])
+
+  const monthOptions = useMemo(() => ({
+    issued: [...new Set(mapped.map(r => ym(r.issued_date)).filter(Boolean))].sort().reverse(),
+    paid: [...new Set(mapped.map(r => ym(r.paid_date)).filter(Boolean))].sort().reverse(),
+  }), [mapped])
+
+  // Payments received per month (by Paid On), for the YTD running totals.
+  const paidByMonth = useMemo(() => {
+    const m = new Map()
+    for (const r of base) { const k = ym(r.paid_date); if (k) m.set(k, (m.get(k) || 0) + Number(r.amount || 0)) }
+    return m
+  }, [base])
+  const paidYtdThrough = k => { let t = 0; for (const [mk, v] of paidByMonth) if (mk.slice(0, 4) === k.slice(0, 4) && mk <= k) t += v; return t }
+  const thisYear = todayISO().slice(0, 4)
+  const paidYtd = paidYtdThrough(`${thisYear}-12`)
+
+  const rows = useMemo(() => {
+    return base.filter(r => {
+      if (monthSel.startsWith('i:') && ym(r.issued_date) !== monthSel.slice(2)) return false
+      if (monthSel.startsWith('p:') && ym(r.paid_date) !== monthSel.slice(2)) return false
       return true
     // Default: newest issued first; invoices issued the same day read in invoice-number order (highest suffix on top).
     // Paid On sort: dated payments in date order, then "paid, no date", then unpaid at the bottom.
@@ -2587,7 +2615,21 @@ function InvoiceList({ invoices, cases, onChanged }) {
       const tail = r => Number((String(r._number).match(/-(\d+)$/) || [])[1] || 0)
       return tail(b) - tail(a) || String(b._number).localeCompare(String(a._number))
     })
-  }, [mapped, q, districtSel, sortBy])
+  }, [base, monthSel, sortBy])
+
+  // Month sections: by Paid On month when sorting by payment date, otherwise by Issued month.
+  const groupBasis = sortBy === 'issued' ? 'issued' : 'paid'
+  const groups = useMemo(() => {
+    const out = []
+    const idx = new Map()
+    for (const r of rows) {
+      const k = ym(groupBasis === 'issued' ? r.issued_date : r.paid_date)
+      let g = idx.get(k)
+      if (!g) { g = { key: k, items: [], total: 0 }; idx.set(k, g); out.push(g) }
+      g.items.push(r); g.total += Number(r.amount || 0)
+    }
+    return out
+  }, [rows, groupBasis])
 
   const totals = useMemo(() => {
     const sum = (pred) => rows.filter(pred).reduce((t, r) => t + Number(r.amount || 0), 0)
@@ -2737,10 +2779,21 @@ function InvoiceList({ invoices, cases, onChanged }) {
               <option value="paid_asc">Sort: Paid On (oldest → newest)</option>
               <option value="paid_desc">Sort: Paid On (newest → oldest)</option>
             </select>
+            <select value={monthSel} onChange={e => setMonthSel(e.target.value)} style={{ maxWidth: 200 }} title="Show one month only">
+              <option value="">All months</option>
+              <optgroup label="Paid in">
+                {monthOptions.paid.map(k => <option key={`p${k}`} value={`p:${k}`}>Paid in {monthLabel(k)}</option>)}
+              </optgroup>
+              <optgroup label="Issued in">
+                {monthOptions.issued.map(k => <option key={`i${k}`} value={`i:${k}`}>Issued in {monthLabel(k)}</option>)}
+              </optgroup>
+            </select>
           </div>
         </div>
         <div style={{ display: 'flex', gap: 18, margin: '10px 0 4px', fontSize: 13, color: '#555', flexWrap: 'wrap' }}>
-          <span>Total <strong>${totals.all.toLocaleString()}</strong></span>
+          <span style={{ color: '#15803d' }} title={`Sum of invoices whose Paid On date is in ${thisYear}${districtSel || q ? ' (within the current district / search filter)' : ''}`}>
+            Paid YTD {thisYear} <strong>${paidYtd.toLocaleString()}</strong></span>
+          <span>{monthSel ? 'Shown' : 'Total'} <strong>${totals.all.toLocaleString()}</strong></span>
           <span>Outstanding <strong>${totals.outstanding.toLocaleString()}</strong></span>
           {totals.overdue > 0 && <span style={{ color: '#b45309' }}>Overdue <strong>${totals.overdue.toLocaleString()}</strong></span>}
         </div>
@@ -2754,7 +2807,18 @@ function InvoiceList({ invoices, cases, onChanged }) {
               </th><th></th></tr></thead>
             <tbody>
               {rows.length === 0 && <tr><td colSpan={8} style={{ color: '#888' }}>{invoices.length === 0 ? 'No invoices yet — one is recorded automatically when every report on a case is approved in QA.' : 'No invoices match that search.'}</td></tr>}
-              {rows.map(inv => editId === inv.id ? (
+              {groups.map(g => (
+                <Fragment key={`g-${g.key || 'none'}`}>
+                  <tr>
+                    <td colSpan={8} style={{ background: '#f3f5f9', fontWeight: 700, fontSize: 12, color: '#334', padding: '6px 10px' }}>
+                      {g.key ? `${groupBasis === 'paid' ? 'Paid in ' : 'Issued in '}${monthLabel(g.key)}` : (groupBasis === 'paid' ? 'No payment date yet' : 'No issue date')}
+                      <span style={{ fontWeight: 400, color: '#667', marginLeft: 10 }}>
+                        {g.items.length} invoice{g.items.length === 1 ? '' : 's'} · ${g.total.toLocaleString()}
+                        {groupBasis === 'paid' && g.key && <> · <span style={{ color: '#15803d', fontWeight: 600 }}>Paid YTD through {monthLabel(g.key).split(' ')[0]}: ${paidYtdThrough(g.key).toLocaleString()}</span></>}
+                      </span>
+                    </td>
+                  </tr>
+              {g.items.map(inv => editId === inv.id ? (
                 <tr key={inv.id}>
                   <td><input value={edit.invoice_number} onChange={e => setEdit(p => ({ ...p, invoice_number: e.target.value }))} style={{ width: 130 }} /></td>
                   <td><input value={edit.student_name} onChange={e => setEdit(p => ({ ...p, student_name: e.target.value }))} style={{ width: 130 }} /></td>
@@ -2817,6 +2881,8 @@ function InvoiceList({ invoices, cases, onChanged }) {
                       </div>
                     </td></tr>
                   )}
+                </Fragment>
+              ))}
                 </Fragment>
               ))}
             </tbody>
