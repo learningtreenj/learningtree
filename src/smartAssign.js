@@ -121,6 +121,7 @@ function calcProximityScore(caseCounty, contrCounty) {
 // Office rules about individual evaluators (public.evaluator_rules):
 //   avoid_district — never recommend them for that district
 //   prefer         — +10 (e.g. a new evaluator the office wants to try out)
+//   travels        — full distance credit wherever the case is (goes anywhere)
 //   note           — shown next to their name, no score change
 const sameDistrict = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase() && !!String(a || '').trim()
 
@@ -128,15 +129,18 @@ export function evaluatorRuleInfo(contractorId, rules = [], { district = '' } = 
   const mine = rules.filter(r => String(r.contractor_id) === String(contractorId))
   const avoided = mine.find(r => r.kind === 'avoid_district' && sameDistrict(r.district, district)) || null
   let bonus = 0
+  let travels = false
   const reasons = []
   for (const r of mine) {
-    if (r.kind === 'prefer') {
+    if (r.kind === 'travels') {
+      travels = true; reasons.push(r.note || 'Travels anywhere')
+    } else if (r.kind === 'prefer') {
       bonus += 10; reasons.push(r.note || 'Office preference')
     } else if (r.kind === 'note' && r.note) {
       reasons.push(r.note)
     }
   }
-  return { avoided, bonus, reasons }
+  return { avoided, bonus, travels, reasons }
 }
 
 /**
@@ -158,7 +162,7 @@ export function scoreContractors(contractors, activeCounts, evalType, language, 
     if (requireLanguage && ls === 0) continue
     const info = evaluatorRuleInfo(c.identifier, rules, { district })
     if (info.avoided) continue
-    const ps = calcProximityScore(county || '', c.county)
+    const ps = info.travels ? 15 : calcProximityScore(county || '', c.county)
     const score = fs + ls + ps + info.bonus
     scored.push({
       contractor: c,

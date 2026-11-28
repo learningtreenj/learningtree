@@ -2381,7 +2381,7 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, evalRul
 
 // Office knowledge about individual evaluators that the recommendation lists apply:
 // "don't use for <district>", "prefer (try them out)", or a note shown next to their name.
-const RULE_KINDS = { avoid_district: 'Don’t use for district', prefer: 'Prefer (+10)', note: 'Note only' }
+const RULE_KINDS = { avoid_district: 'Don’t use for district', prefer: 'Prefer (+10)', travels: 'Travels anywhere (full distance credit)', note: 'Note only' }
 function EvaluatorRules({ contractors, rules, onChanged }) {
   const [open, setOpen] = useState(false)
   const [f, setF] = useState({ contractor_id: '', kind: 'avoid_district', district: '', note: '' })
