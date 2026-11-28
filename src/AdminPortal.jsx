@@ -288,11 +288,14 @@ function ageOn(dob, onDate) {
 function gradeAgeWarning(grade, dob) {
   const age = ageOn(dob)
   if (age == null || !grade) return null
-  const g = grade === 'Pre-K' ? -1 : grade === 'K' ? 0 : Number(grade)
+  const msg = `Grade ${grade} doesn’t fit a ${age}-year-old — check the referral form (“Preschool 3” means Pre-K, not grade 3).`
+  if (grade === 'Pre-K') return age >= 6 ? msg : null          // preschool referrals start around age 2–3
+  const g = grade === 'K' ? 0 : Number(grade)
   if (!Number.isFinite(g)) return null
+  if (age < 5 && g >= 1) return msg                             // a preschooler can't be in grade 1+
   const expected = age - 5   // K at 5, grade 1 at 6…
-  if (Math.abs(g - expected) <= 1) return null
-  return `Grade ${grade} doesn’t fit a ${age}-year-old — check the referral form (“Preschool 3” means Pre-K, not grade 3).`
+  // Too young for the grade, or far older (older students are common, so allow a few years).
+  return g > expected + 1 || g < expected - 3 ? msg : null
 }
 
 // Whole days an assignment has been awaiting the contractor's acceptance
