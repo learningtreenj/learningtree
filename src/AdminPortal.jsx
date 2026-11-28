@@ -6,7 +6,7 @@ import { getRate, invalidateRates, loadRates, rateForLanguage } from './rates.js
 import DistrictHeatmap from './DistrictHeatmap.jsx'
 import { contractorLanguages, contractorSpeaks } from './contractorLangs.js'
 import { cleanDistrict, cleanLanguage } from './normalize.js'
-import { scoreContractors, fieldMatches } from './smartAssign.js'
+import { scoreContractors, fieldMatches, evaluatorRuleInfo } from './smartAssign.js'
 import { extractTextFromFile } from './extractDocumentText.js'
 import { exportCasesToExcel, exportPayrollToExcel, exportEvaluatorYearToExcel } from './exportExcel.js'
 import { zipSync } from 'fflate'
@@ -273,6 +273,28 @@ function TextEdit({ value, onSave, onCancel, disabled, style }) {
   )
 }
 
+// Age in whole years on a given date (default today). Null without a DOB.
+function ageOn(dob, onDate) {
+  if (!dob) return null
+  const b = new Date(String(dob).slice(0, 10) + 'T00:00:00')
+  const d = onDate ? new Date(String(onDate).slice(0, 10) + 'T00:00:00') : new Date()
+  if (isNaN(b) || isNaN(d)) return null
+  let age = d.getFullYear() - b.getFullYear()
+  if (d.getMonth() < b.getMonth() || (d.getMonth() === b.getMonth() && d.getDate() < b.getDate())) age--
+  return age
+}
+// Warn when the grade doesn't fit the child's age (e.g. a 4-year-old entered as grade 3
+// because the form said "Preschool 3"). Typical: Pre-K 3–4, K 5, grade n ≈ age n+5–6.
+function gradeAgeWarning(grade, dob) {
+  const age = ageOn(dob)
+  if (age == null || !grade) return null
+  const g = grade === 'Pre-K' ? -1 : grade === 'K' ? 0 : Number(grade)
+  if (!Number.isFinite(g)) return null
+  const expected = age - 5   // K at 5, grade 1 at 6…
+  if (Math.abs(g - expected) <= 1) return null
+  return `Grade ${grade} doesn’t fit a ${age}-year-old — check the referral form (“Preschool 3” means Pre-K, not grade 3).`
+}
+
 // Whole days an assignment has been awaiting the contractor's acceptance
 // (since they were emailed the assignment). Null if we don't have that timestamp.
 function daysWaiting(a) {
@@ -302,11 +324,12 @@ export default function AdminPortal({ user }) {
   const [emailLog, setEmailLog] = useState([])
   const [selectedCase, setSelectedCase] = useState(null)
   const [contractorLang, setContractorLang] = useState(null) // language filter from dashboard click
+  const [evalRules, setEvalRules] = useState([])              // office rules about evaluators (evaluator_rules)
   const [loading, setLoading] = useState(true)
 
   async function load() {
     setLoading(true)
-    const [c, a, k, i, q, e, b, m] = await Promise.all([
+    const [c, a, k, i, q, e, b, m, r] = await Promise.all([
       fetchAll(() => supabase.from('Cases').select('*').order('id', { ascending: false })),
       fetchAll(() => supabase.from('Assignments').select('*, Contractors(identifier, name, current_rate, email), Cases(id, case_number, Student_name, School_district, Language, County, district_paid, district_payment_date, invoice_seq, Report_Due_date, sent_to_district_at)').order('report_due_date', { ascending: true, nullsFirst: false }).order('id')),
       fetchAll(() => supabase.from('Contractors').select('*').order('name').order('identifier')),
@@ -315,7 +338,9 @@ export default function AdminPortal({ user }) {
       fetchAll(() => supabase.from('contractor_earnings').select('*').order('id')),
       fetchAll(() => supabase.from('payment_batches').select('*').order('id', { ascending: false })),
       fetchAll(() => supabase.from('email_log').select('*').order('sent_at', { ascending: false })),
+      fetchAll(() => supabase.from('evaluator_rules').select('*').order('id')),
     ])
+    setEvalRules(r.data || [])
     setCases(c.data || []); setAssignments(a.data || []); setContractors(k.data || []); setInvoices(i.data || [])
     setQaReviews(q.data || []); setEarnings(e.data || []); setBatches(b.data || []); setEmailLog(m.data || [])
     setLoading(false)
@@ -371,13 +396,16 @@ export default function AdminPortal({ user }) {
         onOpenCase={c => { setSelectedCase(c); setScreen('casedetail') }} cases={cases} earnings={earnings} contractors={contractors}
         onLanguage={lang => { setContractorLang(lang); setScreen('contractors') }} />}
       {screen === 'referral' && <NewReferral onCreated={c => { load(); setSelectedCase(c); setScreen('casedetail') }} />}
-      {screen === 'cases' && <CaseList cases={cases} assignments={assignments} contractors={contractors} earnings={earnings} batches={batches} invoices={invoices} loading={loading}
+      {screen === 'cases' && <CaseList cases={cases} assignments={assignments} contractors={contractors} evalRules={evalRules} earnings={earnings} batches={batches} invoices={invoices} loading={loading}
         onOpen={c => { setSelectedCase(c); setScreen('casedetail') }} onChanged={load} />}
       {screen === 'casedetail' && selectedCase && <CaseDetail caseRow={selectedCase} assignments={assignments.filter(a => a.case_id === selectedCase.id)}
-        allAssignments={assignments} contractors={contractors} qaByAssignment={qaByAssignment} earnings={earnings} onBack={() => setScreen('cases')} onChanged={load} />}
+        allAssignments={assignments} contractors={contractors} evalRules={evalRules} qaByAssignment={qaByAssignment} earnings={earnings} onBack={() => setScreen('cases')} onChanged={load} />}
       {screen === 'interpreters' && <InterpreterRequests contractors={contractors} />}
-      {screen === 'contractors' && <ContractorList contractors={contractors} assignments={assignments} onChanged={load}
-        languageFilter={contractorLang} onClearLanguageFilter={() => setContractorLang(null)} />}
+      {screen === 'contractors' && <>
+        <EvaluatorRules contractors={contractors} rules={evalRules} onChanged={load} />
+        <ContractorList contractors={contractors} assignments={assignments} onChanged={load}
+          languageFilter={contractorLang} onClearLanguageFilter={() => setContractorLang(null)} />
+      </>}
       {screen === 'qa' && <QaQueue assignments={assignments} qaByAssignment={qaByAssignment} earnings={earnings} onChanged={load} />}
       {screen === 'invoices' && <InvoiceList invoices={invoices} cases={cases} onChanged={load} />}
       {screen === 'payroll' && <Payroll assignments={assignments} earnings={earnings} batches={batches} contractors={contractors} onChanged={load}
@@ -841,7 +869,8 @@ function NewReferral({ onCreated }) {
     const s = String(g).trim()
     const options = ['Pre-K', 'K', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12']
     if (options.includes(s)) return s
-    if (/pre.?k/i.test(s)) return 'Pre-K'
+    // "Preschool 3", "Pre-School", "PS3", "PK4", "Pre-K 3" are all Pre-K (the number is the age, not a grade).
+    if (/pre.?k|pre.?school|^p\.?\s?[sk]\b|^p[sk]\s?\d/i.test(s)) return 'Pre-K'
     if (/^k/i.test(s)) return 'K'
     const m = s.match(/\d+/)
     return m && options.includes(m[0]) ? m[0] : ''
@@ -997,6 +1026,7 @@ function NewReferral({ onCreated }) {
         </div>
         <div className="form-group"><label>Language(s)</label><input placeholder="e.g. Spanish" value={f.Language} onChange={e => set('Language', e.target.value)} onBlur={e => set('Language', cleanLanguage(e.target.value))} /></div>
       </div>
+      {gradeAgeWarning(f.grade, f.student_dob) && <div className="alert alert-warn" style={{ marginTop: -4 }}>⚠️ {gradeAgeWarning(f.grade, f.student_dob)}</div>}
 
       <SectionHead>Parent / Guardian</SectionHead>
       <div className="form-row">
@@ -1060,9 +1090,24 @@ function NewReferral({ onCreated }) {
   )
 }
 
-function contractorOptLabel(k) {
+function contractorOptLabel(k, rules = [], district = '') {
   const spec = [k.field, [k.language, k.language_2].filter(Boolean).join('/')].filter(Boolean)
-  return k.name + (spec.length ? ` — ${spec.join(' · ')}` : '')
+  const { avoided } = evaluatorRuleInfo(k.identifier, rules, { district })
+  return (avoided ? '⚠ ' : '') + k.name + (spec.length ? ` — ${spec.join(' · ')}` : '') + (avoided ? ` (not for ${avoided.district})` : '')
+}
+
+// Shown when no evaluator speaks the case's language in this field (e.g. Vietnamese psych).
+function NoLanguageMatch({ language, evalLabel }) {
+  const lang = String(language || '').trim()
+  if (!lang || /^english$/i.test(lang)) {
+    return <div style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>No evaluator in this field yet.</div>
+  }
+  return (
+    <div style={{ fontSize: 12, background: '#fff3cd', color: '#7a5c00', borderRadius: 5, padding: '6px 8px', marginBottom: 6 }}>
+      No {lang} evaluator for {evalLabel}. Use an English-speaking evaluator with an interpreter,
+      but <strong>confirm with the district first</strong> that an interpreter is acceptable.
+    </div>
+  )
 }
 
 // Maps an eval-type column to the keyword scoreContractors understands.
@@ -1071,7 +1116,7 @@ const EVAL_SCORE_KEY = { Psych: 'psych', 'Sp.': 'speech', 'Ed.': 'ed', 'Soc.': '
 // Click-to-edit popover for one eval-type cell: reassign/remove existing evaluators,
 // or assign one to a requested-but-empty eval. The assign picker shows language- and
 // field-matched recommendations (same scoring as Case Detail). Positioned at the click.
-function CellEditor({ anchor, caseRow, col, token, cellAsg, contractors, assignments = [], busy, onReassign, onRemove, onAssign, onClose }) {
+function CellEditor({ anchor, caseRow, col, token, cellAsg, contractors, rules = [], assignments = [], busy, onReassign, onRemove, onAssign, onClose }) {
   const [addTo, setAddTo] = useState('')
   const [reSel, setReSel] = useState({})
   const [pickQ, setPickQ] = useState('')
@@ -1091,8 +1136,9 @@ function CellEditor({ anchor, caseRow, col, token, cellAsg, contractors, assignm
   const activeContractors = useMemo(() => contractors.filter(k => k.active !== false), [contractors])
   // Every active evaluator who matches the field (and language), best first — no top-N cut-off.
   const recs = useMemo(
-    () => token ? scoreContractors(activeContractors, activeCounts, evalForScore, caseRow.Language, caseRow.County) : [],
-    [token, activeContractors, activeCounts, evalForScore, caseRow])
+    () => token ? scoreContractors(activeContractors, activeCounts, evalForScore, caseRow.Language, caseRow.County, { rules, district: caseRow.School_district }) : [],
+    [token, activeContractors, activeCounts, evalForScore, caseRow, rules])
+  const optLabel = k => contractorOptLabel(k, rules, caseRow.School_district)
   // Manual picker: only this column's field (Speech → speech pathologists), unless "all" is ticked.
   const pickList = useMemo(() => {
     const needle = pickQ.trim().toLowerCase()
@@ -1117,7 +1163,7 @@ function CellEditor({ anchor, caseRow, col, token, cellAsg, contractors, assignm
             <div key={a.id} style={{ borderTop: '1px solid var(--border)', paddingTop: 8, marginTop: 8 }}>
               <div style={{ marginBottom: 5 }}>{a.Contractors?.name || 'Assigned'} {sub && <span style={{ color: '#1a7a3c' }}>· submitted</span>}</div>
               <select value={reSel[a.id] ?? String(a.contractor_id ?? '')} onChange={e => setReSel(p => ({ ...p, [a.id]: e.target.value }))} style={{ width: '100%', padding: '5px 6px' }}>
-                {withCurrent(pickList, a.contractor_id).map(k => <option key={k.identifier} value={k.identifier}>{contractorOptLabel(k)}</option>)}
+                {withCurrent(pickList, a.contractor_id).map(k => <option key={k.identifier} value={k.identifier}>{optLabel(k)}</option>)}
               </select>
               <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
                 <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => onReassign(a, reSel[a.id] ?? a.contractor_id)}>Reassign</button>
@@ -1143,17 +1189,19 @@ function CellEditor({ anchor, caseRow, col, token, cellAsg, contractors, assignm
                       <div style={{ fontSize: 11, color: '#888', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {[r.contractor.field, [r.contractor.language, r.contractor.language_2].filter(Boolean).join('/'), r.contractor.county && `${r.contractor.county} Co.`].filter(Boolean).join(' · ')}
                       </div>
+                      {r.reasons?.map((t, i) => <div key={i} style={{ fontSize: 11, color: '#7a5c00' }}>★ {t}</div>)}
                     </span>
                     <span style={{ fontSize: 11, color: '#888', whiteSpace: 'nowrap' }}>{r.activeCaseCount} open</span>
                   </div>
                 ))}
               </div>
             )}
-            <div style={{ fontSize: 11, color: '#999', marginBottom: 4 }}>{recs.length ? `${recs.length} match${recs.length === 1 ? '' : 'es'} above. Or choose manually:` : 'No language/field match — choose manually:'}</div>
+            {recs.length === 0 && <NoLanguageMatch language={caseRow.Language} evalLabel={token || col} />}
+            <div style={{ fontSize: 11, color: '#999', marginBottom: 4 }}>{recs.length ? `${recs.length} match${recs.length === 1 ? '' : 'es'} above. Or choose manually:` : 'Choose manually:'}</div>
             <input placeholder="🔍 Search name, language, county…" value={pickQ} onChange={e => setPickQ(e.target.value)} style={{ width: '100%', padding: '5px 6px', marginBottom: 4 }} />
             <select value={addTo} onChange={e => setAddTo(e.target.value)} style={{ width: '100%', padding: '5px 6px' }}>
               <option value="">Select contractor… ({pickList.length})</option>
-              {pickList.map(k => <option key={k.identifier} value={k.identifier}>{contractorOptLabel(k)}</option>)}
+              {pickList.map(k => <option key={k.identifier} value={k.identifier}>{optLabel(k)}</option>)}
             </select>
             <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#777', marginTop: 4, fontWeight: 400 }}>
               <input type="checkbox" checked={showAllFields} onChange={e => setShowAllFields(e.target.checked)} style={{ width: 'auto' }} />
@@ -1199,7 +1247,7 @@ function invoicePaidByCase(cases, invoices) {
   return m
 }
 
-function CaseList({ cases, assignments, contractors = [], earnings = [], batches = [], invoices = [], loading, onOpen, onChanged }) {
+function CaseList({ cases, assignments, contractors = [], evalRules = [], earnings = [], batches = [], invoices = [], loading, onOpen, onChanged }) {
   const [q, setQ] = useState('')
   const [chip, setChip] = useState('active')
   const [expanded, setExpanded] = useState({})
@@ -1596,7 +1644,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
       {rows.length > 200 && <div style={{ marginTop: 8, fontSize: 12, color: '#888' }}>Showing first 200 — refine your search to see more.</div>}
       {editCell && (
         <CellEditor anchor={{ x: editCell.x, y: editCell.y }} caseRow={editCell.caseRow} col={editCell.col} token={editCell.token}
-          cellAsg={editCell.cellAsg} contractors={contractors.filter(k => k.active !== false)} assignments={assignments} busy={rowBusy}
+          cellAsg={editCell.cellAsg} contractors={contractors} rules={evalRules} assignments={assignments} busy={rowBusy}
           onReassign={reassignInline} onRemove={removeInline}
           onAssign={(tok, toId) => assignInline(editCell.caseRow, tok, toId)} onClose={() => setEditCell(null)} />
       )}
@@ -1604,7 +1652,7 @@ function CaseList({ cases, assignments, contractors = [], earnings = [], batches
   )
 }
 
-function CaseDetail({ caseRow, assignments, allAssignments, contractors, qaByAssignment, earnings = [], onBack, onChanged }) {
+function CaseDetail({ caseRow, assignments, allAssignments, contractors, evalRules = [], qaByAssignment, earnings = [], onBack, onChanged }) {
   // Local mirror of the case so edits show immediately (the parent's selectedCase
   // isn't refreshed by load()). Resyncs whenever a different case is opened.
   const [c, setC] = useState(caseRow)
@@ -1844,8 +1892,8 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, qaByAss
       activeCounts.set(a.contractor_id, (activeCounts.get(a.contractor_id) || 0) + 1)
     }
     // Only recommend contractors flagged active.
-    return scoreContractors(contractors.filter(k => k.active !== false), activeCounts, newAsg.eval_type, c.Language, c.County)
-  }, [newAsg.eval_type, contractors, allAssignments, c])
+    return scoreContractors(contractors.filter(k => k.active !== false), activeCounts, newAsg.eval_type, c.Language, c.County, { rules: evalRules, district: c.School_district })
+  }, [newAsg.eval_type, contractors, allAssignments, c, evalRules])
 
   async function assign() {
     if (!newAsg.contractor_id || !newAsg.eval_type) { setMsg({ kind: 'warn', text: 'Pick a contractor and evaluation type.' }); return }
@@ -2048,13 +2096,32 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, qaByAss
             {c.sent_to_district_at && <Meta k="Date Sent to District" v={fmtDate(c.sent_to_district_at)} style={{ color: 'var(--green)' }} />}
             <Meta k="Language" v={c.Language} />
             <Meta k="Grade" v={c['grade level']} />
-            <Meta k="DOB" v={c.student_dob ? fmtDate(c.student_dob) : null} />
+            <Meta k="DOB" v={c.student_dob ? `${fmtDate(c.student_dob)} (age ${ageOn(c.student_dob)})` : null} />
             <Meta k="Eval Types Requested" v={c.evaluation_type} />
             <Meta k="Case Manager" v={c.case_manager_name} />
             <Meta k="Case Mgr Phone" v={c.case_manager_phone} />
             <Meta k="Referral Source" v={c.referral_source} />
             <Meta k="Referral Source Contact" v={c.referral_source_contact} />
           </div>
+          {gradeAgeWarning(c['grade level'], c.student_dob) && <div className="alert alert-warn" style={{ marginTop: 12, marginBottom: 0 }}>⚠️ {gradeAgeWarning(c['grade level'], c.student_dob)}</div>}
+          {(() => {
+            // Preschool testing: the BDI (Battelle Developmental Inventory) is only for children under 5.
+            const now = ageOn(c.student_dob)
+            if (now == null || now >= 5) return null
+            const b = new Date(String(c.student_dob).slice(0, 10) + 'T00:00:00')
+            const fifth = new Date(b.getFullYear() + 5, b.getMonth(), b.getDate())
+            const fifthISO = `${fifth.getFullYear()}-${String(fifth.getMonth() + 1).padStart(2, '0')}-${String(fifth.getDate()).padStart(2, '0')}`
+            const due = c.Report_Due_date ? String(c.Report_Due_date).slice(0, 10) : null
+            const beforeDue = due && fifthISO <= due
+            return (
+              <div className={`alert ${beforeDue ? 'alert-warn' : 'alert-info'}`} style={{ marginTop: 12, marginBottom: 0 }}>
+                🧒 Preschool child — turns 5 on <strong>{fmtDate(fifthISO)}</strong>.{' '}
+                {beforeDue
+                  ? <>That’s on or before the report due date ({fmtDate(due)}): if testing happens after the 5th birthday the <strong>BDI can’t be used</strong> — let the evaluator know.</>
+                  : <>The BDI can be used if testing is done before then.</>}
+              </div>
+            )
+          })()}
           <div className="alert alert-info" style={{ marginTop: 14, marginBottom: 0, alignItems: 'center', flexWrap: 'wrap' }}>
             📎 <span style={{ flex: 1, minWidth: 200 }}>
               {c.referral_file_path
@@ -2276,9 +2343,7 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, qaByAss
             <select value={newAsg.contractor_id} onChange={e => setNewAsg(p => ({ ...p, contractor_id: e.target.value }))}>
               <option value="">Select contractor…</option>
               {filteredContractors.map(k => (
-                <option key={k.identifier} value={k.identifier}>
-                  {k.name}{k.field ? ` — ${k.field}` : ''}{k.language ? ` (${[k.language, k.language_2].filter(Boolean).join('/')})` : ''}
-                </option>
+                <option key={k.identifier} value={k.identifier}>{contractorOptLabel(k, evalRules, c.School_district)}</option>
               ))}
             </select>
           </div>
@@ -2287,7 +2352,7 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, qaByAss
           {newAsg.eval_type && (
             <div style={{ marginTop: 14, borderTop: '1px solid #e5e7eb', paddingTop: 12 }}>
               <div className="card-title" style={{ marginBottom: 8 }}>⭐ Recommended for {newAsg.eval_type}{c.Language ? ` · ${c.Language}` : ''}{c.County ? ` · ${c.County}` : ''}</div>
-              {recommendations.length === 0 && <div style={{ fontSize: 12, color: '#888' }}>No matching contractors (field{c.Language ? ' + language' : ''} filter). Pick manually above.</div>}
+              {recommendations.length === 0 && <NoLanguageMatch language={c.Language} evalLabel={newAsg.eval_type} />}
               <div style={{ maxHeight: 360, overflowY: 'auto' }}>
               {recommendations.map(r => (
                 <div key={r.contractor.identifier}
@@ -2297,6 +2362,7 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, qaByAss
                   <div style={{ flex: 1, fontSize: 13 }}>
                     <strong>{r.contractor.name}</strong>
                     <span style={{ color: '#888' }}> — {[r.contractor.field, [r.contractor.language, r.contractor.language_2].filter(Boolean).join('/'), r.contractor.county].filter(Boolean).join(' · ')}</span>
+                    {r.reasons?.map((t, i) => <div key={i} style={{ fontSize: 11.5, color: '#7a5c00' }}>★ {t}</div>)}
                   </div>
                   <span style={{ fontSize: 11, color: '#888' }}>{r.activeCaseCount} open</span>
                 </div>
@@ -2307,6 +2373,92 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, qaByAss
         </div>
       </div>
     </>
+  )
+}
+
+// Office knowledge about individual evaluators that the recommendation lists apply:
+// "don't use for <district>", "prefer (try them out)", or a note shown next to their name.
+const RULE_KINDS = { avoid_district: 'Don’t use for district', prefer: 'Prefer (+10)', note: 'Note only' }
+function EvaluatorRules({ contractors, rules, onChanged }) {
+  const [open, setOpen] = useState(false)
+  const [f, setF] = useState({ contractor_id: '', kind: 'avoid_district', district: '', note: '' })
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState(null)
+  const nameOf = id => contractors.find(k => String(k.identifier) === String(id))?.name || `#${id}`
+  const sorted = useMemo(() => [...contractors].filter(k => k.name).sort((a, b) => a.name.localeCompare(b.name)), [contractors])
+
+  async function add() {
+    if (!f.contractor_id) { setMsg({ kind: 'warn', text: 'Pick an evaluator.' }); return }
+    if (f.kind === 'avoid_district' && !f.district.trim()) { setMsg({ kind: 'warn', text: 'Enter the district.' }); return }
+    if (f.kind !== 'avoid_district' && !f.note.trim()) { setMsg({ kind: 'warn', text: 'Add a short note explaining it.' }); return }
+    setBusy(true); setMsg(null)
+    const { error } = await supabase.from('evaluator_rules').insert({
+      contractor_id: Number(f.contractor_id), kind: f.kind,
+      district: f.kind === 'avoid_district' ? cleanDistrict(f.district) : null,
+      note: f.note.trim() || null,
+    })
+    setBusy(false)
+    if (error) { setMsg({ kind: 'danger', text: error.message }); return }
+    setF({ contractor_id: '', kind: 'avoid_district', district: '', note: '' })
+    setMsg({ kind: 'success', text: 'Rule added — the evaluator pickers use it right away.' })
+    onChanged()
+  }
+  async function remove(r) {
+    if (!window.confirm(`Remove this rule for ${nameOf(r.contractor_id)}?`)) return
+    const { error } = await supabase.from('evaluator_rules').delete().eq('id', r.id)
+    if (error) setMsg({ kind: 'danger', text: error.message }); else onChanged()
+  }
+
+  return (
+    <div className="card" style={{ marginBottom: 14 }}>
+      <div className="card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', cursor: 'pointer' }} onClick={() => setOpen(o => !o)}>
+        <span>★ Evaluator rules ({rules.length}) <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--muted)' }}>— office preferences the recommendations follow</span></span>
+        <span style={{ fontSize: 12, color: 'var(--muted)' }}>{open ? '▲ Hide' : '▼ Show'}</span>
+      </div>
+      {open && (
+        <>
+          {msg && <div className={`alert alert-${msg.kind}`}>{msg.text}</div>}
+          <div className="tbl-wrap" style={{ marginBottom: 10 }}>
+            <table>
+              <thead><tr><th>Evaluator</th><th>Rule</th><th>Note</th><th></th></tr></thead>
+              <tbody>
+                {rules.length === 0 && <tr><td colSpan={4} style={{ color: '#888' }}>No rules yet.</td></tr>}
+                {rules.map(r => (
+                  <tr key={r.id}>
+                    <td style={{ whiteSpace: 'nowrap' }}>{nameOf(r.contractor_id)}</td>
+                    <td style={{ whiteSpace: 'nowrap' }}>{r.kind === 'avoid_district' ? `Don’t use for ${r.district}` : RULE_KINDS[r.kind] || r.kind}</td>
+                    <td style={{ fontSize: 12.5 }}>{r.note || '—'}</td>
+                    <td><button className="btn btn-ghost btn-sm" title="Remove rule" onClick={() => remove(r)}>🗑</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <div className="form-group" style={{ margin: 0, minWidth: 200 }}><label>Evaluator</label>
+              <select value={f.contractor_id} onChange={e => setF(p => ({ ...p, contractor_id: e.target.value }))}>
+                <option value="">Select…</option>
+                {sorted.map(k => <option key={k.identifier} value={k.identifier}>{k.name}{k.field ? ` — ${k.field}` : ''}</option>)}
+              </select>
+            </div>
+            <div className="form-group" style={{ margin: 0 }}><label>Rule</label>
+              <select value={f.kind} onChange={e => setF(p => ({ ...p, kind: e.target.value }))}>
+                {Object.entries(RULE_KINDS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              </select>
+            </div>
+            {f.kind === 'avoid_district' && (
+              <div className="form-group" style={{ margin: 0 }}><label>District</label>
+                <input value={f.district} placeholder="e.g. Woodbridge" onChange={e => setF(p => ({ ...p, district: e.target.value }))} />
+              </div>
+            )}
+            <div className="form-group" style={{ margin: 0, flex: 1, minWidth: 220 }}><label>Why (shown to whoever assigns)</label>
+              <input value={f.note} placeholder="e.g. bad experience with this district" onChange={e => setF(p => ({ ...p, note: e.target.value }))} />
+            </div>
+            <button className="btn btn-primary btn-sm" disabled={busy} onClick={add}>+ Add rule</button>
+          </div>
+        </>
+      )}
+    </div>
   )
 }
 

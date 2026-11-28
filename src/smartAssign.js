@@ -118,12 +118,36 @@ function calcProximityScore(caseCounty, contrCounty) {
   return 0
 }
 
+// Office rules about individual evaluators (public.evaluator_rules):
+//   avoid_district — never recommend them for that district
+//   prefer         — +10 (e.g. a new evaluator the office wants to try out)
+//   note           — shown next to their name, no score change
+const sameDistrict = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase() && !!String(a || '').trim()
+
+export function evaluatorRuleInfo(contractorId, rules = [], { district = '' } = {}) {
+  const mine = rules.filter(r => String(r.contractor_id) === String(contractorId))
+  const avoided = mine.find(r => r.kind === 'avoid_district' && sameDistrict(r.district, district)) || null
+  let bonus = 0
+  const reasons = []
+  for (const r of mine) {
+    if (r.kind === 'prefer') {
+      bonus += 10; reasons.push(r.note || 'Office preference')
+    } else if (r.kind === 'note' && r.note) {
+      reasons.push(r.note)
+    }
+  }
+  return { avoided, bonus, reasons }
+}
+
 /**
  * Score contractors for a case. activeCounts: Map(contractor_id → open case count).
- * Returns [{contractor, score, tier, languageScore, fieldScore, proximityScore, activeCaseCount}]
- * sorted best-first. Field mismatch (and language mismatch on non-English cases) are excluded.
+ * opts: { rules, district } — office rules from evaluator_rules.
+ * Returns [{contractor, score, tier, languageScore, fieldScore, proximityScore, ruleBonus, reasons, activeCaseCount}]
+ * sorted best-first. Field mismatch (and language mismatch on non-English cases) are excluded,
+ * as are evaluators the office has ruled out for this district.
  */
-export function scoreContractors(contractors, activeCounts, evalType, language, county) {
+export function scoreContractors(contractors, activeCounts, evalType, language, county, opts = {}) {
+  const { rules = [], district = '' } = opts
   const requireLanguage = !isEnglishOrEmpty(language)
   const scored = []
   for (const c of contractors) {
@@ -132,8 +156,10 @@ export function scoreContractors(contractors, activeCounts, evalType, language, 
     if (fs === 0) continue
     const ls = calcLanguageScore(language || '', c.language, c.language_2)
     if (requireLanguage && ls === 0) continue
+    const info = evaluatorRuleInfo(c.identifier, rules, { district })
+    if (info.avoided) continue
     const ps = calcProximityScore(county || '', c.county)
-    const score = fs + ls + ps
+    const score = fs + ls + ps + info.bonus
     scored.push({
       contractor: c,
       score,
@@ -141,6 +167,8 @@ export function scoreContractors(contractors, activeCounts, evalType, language, 
       languageScore: ls,
       fieldScore: fs,
       proximityScore: ps,
+      ruleBonus: info.bonus,
+      reasons: info.reasons,
       activeCaseCount: activeCounts.get(c.identifier) || 0,
     })
   }
