@@ -60,7 +60,7 @@ const FIELD_MAP = [
   { keys: ['ed', 'educational', 'learning'], fields: ['Learning Consultant', 'Psychologist/LD'] },
   { keys: ['speech', 'slp', 'language patholog'], fields: ['Speech Pathologist', 'Speech Language Pathologist', 'SLP', 'Speech Language'] },
   { keys: ['social'], fields: ['Social Worker'] },
-  { keys: ['ot', 'occupational'], fields: ['OT'] },
+  { keys: ['ot', 'occupational'], fields: ['OT', 'Occupational Therapist'] },
   { keys: ['pt', 'physical'], fields: ['Physical Therapist'] },
 ]
 
@@ -74,6 +74,11 @@ function calcFieldScore(evalType, contractorField) {
     }
   }
   return 0
+}
+
+// True when a contractor's field can do this evaluation type (Speech → speech pathologists, etc.).
+export function fieldMatches(evalType, contractorField) {
+  return calcFieldScore(evalType, contractorField) > 0
 }
 
 function isEnglishOrEmpty(lang) {

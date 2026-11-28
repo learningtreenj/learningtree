@@ -6,7 +6,7 @@ import { getRate, invalidateRates, loadRates, rateForLanguage } from './rates.js
 import DistrictHeatmap from './DistrictHeatmap.jsx'
 import { contractorLanguages, contractorSpeaks } from './contractorLangs.js'
 import { cleanDistrict, cleanLanguage } from './normalize.js'
-import { scoreContractors } from './smartAssign.js'
+import { scoreContractors, fieldMatches } from './smartAssign.js'
 import { extractTextFromFile } from './extractDocumentText.js'
 import { exportCasesToExcel, exportPayrollToExcel, exportEvaluatorYearToExcel } from './exportExcel.js'
 import { zipSync } from 'fflate'
@@ -1074,6 +1074,8 @@ const EVAL_SCORE_KEY = { Psych: 'psych', 'Sp.': 'speech', 'Ed.': 'ed', 'Soc.': '
 function CellEditor({ anchor, caseRow, col, token, cellAsg, contractors, assignments = [], busy, onReassign, onRemove, onAssign, onClose }) {
   const [addTo, setAddTo] = useState('')
   const [reSel, setReSel] = useState({})
+  const [pickQ, setPickQ] = useState('')
+  const [showAllFields, setShowAllFields] = useState(false)
   const left = Math.max(8, Math.min(anchor.x, (typeof window !== 'undefined' ? window.innerWidth : 1000) - 360))
   const top = Math.max(8, Math.min(anchor.y, (typeof window !== 'undefined' ? window.innerHeight : 800) - 320))
 
@@ -1086,9 +1088,22 @@ function CellEditor({ anchor, caseRow, col, token, cellAsg, contractors, assignm
     }
     return m
   }, [assignments])
+  const activeContractors = useMemo(() => contractors.filter(k => k.active !== false), [contractors])
+  // Every active evaluator who matches the field (and language), best first — no top-N cut-off.
   const recs = useMemo(
-    () => token ? scoreContractors(contractors, activeCounts, evalForScore, caseRow.Language, caseRow.County).slice(0, 8) : [],
-    [token, contractors, activeCounts, evalForScore, caseRow])
+    () => token ? scoreContractors(activeContractors, activeCounts, evalForScore, caseRow.Language, caseRow.County) : [],
+    [token, activeContractors, activeCounts, evalForScore, caseRow])
+  // Manual picker: only this column's field (Speech → speech pathologists), unless "all" is ticked.
+  const pickList = useMemo(() => {
+    const needle = pickQ.trim().toLowerCase()
+    const inField = activeContractors.filter(k => fieldMatches(evalForScore, k.field))
+    // An eval type with no field rule (e.g. something in "Other") falls back to everyone active.
+    return (showAllFields ? contractors : inField.length ? inField : activeContractors)
+      .filter(k => !needle || `${k.name || ''} ${k.field || ''} ${k.language || ''} ${k.language_2 || ''} ${k.county || ''}`.toLowerCase().includes(needle))
+      .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+  }, [showAllFields, contractors, activeContractors, evalForScore, pickQ])
+  const withCurrent = (list, id) => list.some(k => String(k.identifier) === String(id)) ? list
+    : [...contractors.filter(k => String(k.identifier) === String(id)), ...list]
 
   return (
     <>
@@ -1102,7 +1117,7 @@ function CellEditor({ anchor, caseRow, col, token, cellAsg, contractors, assignm
             <div key={a.id} style={{ borderTop: '1px solid var(--border)', paddingTop: 8, marginTop: 8 }}>
               <div style={{ marginBottom: 5 }}>{a.Contractors?.name || 'Assigned'} {sub && <span style={{ color: '#1a7a3c' }}>· submitted</span>}</div>
               <select value={reSel[a.id] ?? String(a.contractor_id ?? '')} onChange={e => setReSel(p => ({ ...p, [a.id]: e.target.value }))} style={{ width: '100%', padding: '5px 6px' }}>
-                {contractors.map(k => <option key={k.identifier} value={k.identifier}>{contractorOptLabel(k)}</option>)}
+                {withCurrent(pickList, a.contractor_id).map(k => <option key={k.identifier} value={k.identifier}>{contractorOptLabel(k)}</option>)}
               </select>
               <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
                 <button className="btn btn-primary btn-sm" disabled={busy} onClick={() => onReassign(a, reSel[a.id] ?? a.contractor_id)}>Reassign</button>
@@ -1134,11 +1149,16 @@ function CellEditor({ anchor, caseRow, col, token, cellAsg, contractors, assignm
                 ))}
               </div>
             )}
-            <div style={{ fontSize: 11, color: '#999', marginBottom: 4 }}>{recs.length ? 'Or choose anyone:' : 'No language/field match — choose manually:'}</div>
+            <div style={{ fontSize: 11, color: '#999', marginBottom: 4 }}>{recs.length ? `${recs.length} match${recs.length === 1 ? '' : 'es'} above. Or choose manually:` : 'No language/field match — choose manually:'}</div>
+            <input placeholder="🔍 Search name, language, county…" value={pickQ} onChange={e => setPickQ(e.target.value)} style={{ width: '100%', padding: '5px 6px', marginBottom: 4 }} />
             <select value={addTo} onChange={e => setAddTo(e.target.value)} style={{ width: '100%', padding: '5px 6px' }}>
-              <option value="">Select contractor…</option>
-              {contractors.map(k => <option key={k.identifier} value={k.identifier}>{contractorOptLabel(k)}</option>)}
+              <option value="">Select contractor… ({pickList.length})</option>
+              {pickList.map(k => <option key={k.identifier} value={k.identifier}>{contractorOptLabel(k)}</option>)}
             </select>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11, color: '#777', marginTop: 4, fontWeight: 400 }}>
+              <input type="checkbox" checked={showAllFields} onChange={e => setShowAllFields(e.target.checked)} style={{ width: 'auto' }} />
+              Show all contractors (any field, including inactive)
+            </label>
             <button className="btn btn-primary btn-sm" style={{ marginTop: 6 }} disabled={busy || !addTo} onClick={() => onAssign(token, addTo)}>Assign &amp; notify</button>
           </div>
         )}
@@ -1593,6 +1613,7 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, qaByAss
   const [msg, setMsg] = useState(null)
   const [newAsg, setNewAsg] = useState({ contractor_id: '', eval_type: '', report_due_date: caseRow.Report_Due_date || '' })
   const [contractorQuery, setContractorQuery] = useState('')
+  const [showAllFields, setShowAllFields] = useState(false)
   const [busy, setBusy] = useState(false)
   const [editing, setEditing] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -1808,8 +1829,12 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, qaByAss
     onBack()   // case is gone — return to the list
   }
 
-  const filteredContractors = contractors.filter(k => k.active !== false).filter(k =>
-    `${k.name || ''} ${k.field || ''} ${k.language || ''} ${k.language_2 || ''} ${k.county || ''}`.toLowerCase().includes(contractorQuery.toLowerCase()))
+  // Once an evaluation type is picked, only evaluators in that field are listed (tick "all fields" to override).
+  const fieldFilterOn = !!newAsg.eval_type && !showAllFields && contractors.some(k => k.active !== false && fieldMatches(newAsg.eval_type, k.field))
+  const filteredContractors = contractors.filter(k => k.active !== false)
+    .filter(k => !fieldFilterOn || fieldMatches(newAsg.eval_type, k.field))
+    .filter(k => `${k.name || ''} ${k.field || ''} ${k.language || ''} ${k.language_2 || ''} ${k.county || ''}`.toLowerCase().includes(contractorQuery.toLowerCase()))
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
 
   const recommendations = useMemo(() => {
     if (!newAsg.eval_type) return []
@@ -1819,7 +1844,7 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, qaByAss
       activeCounts.set(a.contractor_id, (activeCounts.get(a.contractor_id) || 0) + 1)
     }
     // Only recommend contractors flagged active.
-    return scoreContractors(contractors.filter(k => k.active !== false), activeCounts, newAsg.eval_type, c.Language, c.County).slice(0, 8)
+    return scoreContractors(contractors.filter(k => k.active !== false), activeCounts, newAsg.eval_type, c.Language, c.County)
   }, [newAsg.eval_type, contractors, allAssignments, c])
 
   async function assign() {
@@ -2218,9 +2243,33 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, qaByAss
 
         <div className="card" style={{ border: '2px solid var(--accent)' }}>
           <div className="card-title">👤 Assign a Contractor</div>
+          <div className="form-row">
+            <div className="form-group">
+              <label>Evaluation Type</label>
+              <select value={newAsg.eval_type} onChange={e => {
+                const t = e.target.value
+                setNewAsg(p => {
+                  // Clear a picked contractor who isn't in the newly chosen field.
+                  const k = contractors.find(x => String(x.identifier) === String(p.contractor_id))
+                  return { ...p, eval_type: t, contractor_id: k && t && !showAllFields && !fieldMatches(t, k.field) ? '' : p.contractor_id }
+                })
+              }}>
+                <option value="">Select…</option>
+                {EVAL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+            <div className="form-group">
+              <label>Report Due Date</label>
+              <input type="date" value={newAsg.report_due_date || ''} onChange={e => setNewAsg(p => ({ ...p, report_due_date: e.target.value }))} />
+            </div>
+          </div>
           <div className="form-group">
-            <label>Filter Contractors ({filteredContractors.length})</label>
-            <input placeholder="🔍 Name, field, language, county…" value={contractorQuery} onChange={e => setContractorQuery(e.target.value)} />
+            <label>Filter Contractors ({filteredContractors.length}{fieldFilterOn ? ` ${newAsg.eval_type} evaluators` : ''})</label>
+            <input placeholder="🔍 Name, language, county…" value={contractorQuery} onChange={e => setContractorQuery(e.target.value)} />
+            <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#777', marginTop: 4, fontWeight: 400 }}>
+              <input type="checkbox" checked={showAllFields} onChange={e => setShowAllFields(e.target.checked)} style={{ width: 'auto' }} />
+              Show contractors from every field
+            </label>
           </div>
           <div className="form-group">
             <label>Contractor</label>
@@ -2233,25 +2282,13 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, qaByAss
               ))}
             </select>
           </div>
-          <div className="form-row">
-            <div className="form-group">
-              <label>Evaluation Type</label>
-              <select value={newAsg.eval_type} onChange={e => setNewAsg(p => ({ ...p, eval_type: e.target.value }))}>
-                <option value="">Select…</option>
-                {EVAL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-              </select>
-            </div>
-            <div className="form-group">
-              <label>Report Due Date</label>
-              <input type="date" value={newAsg.report_due_date || ''} onChange={e => setNewAsg(p => ({ ...p, report_due_date: e.target.value }))} />
-            </div>
-          </div>
           <button className="btn btn-primary" disabled={busy} onClick={assign}>Assign Contractor</button>
 
           {newAsg.eval_type && (
             <div style={{ marginTop: 14, borderTop: '1px solid #e5e7eb', paddingTop: 12 }}>
               <div className="card-title" style={{ marginBottom: 8 }}>⭐ Recommended for {newAsg.eval_type}{c.Language ? ` · ${c.Language}` : ''}{c.County ? ` · ${c.County}` : ''}</div>
               {recommendations.length === 0 && <div style={{ fontSize: 12, color: '#888' }}>No matching contractors (field{c.Language ? ' + language' : ''} filter). Pick manually above.</div>}
+              <div style={{ maxHeight: 360, overflowY: 'auto' }}>
               {recommendations.map(r => (
                 <div key={r.contractor.identifier}
                   style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 5, cursor: 'pointer', background: String(newAsg.contractor_id) === String(r.contractor.identifier) ? 'var(--accent-light)' : 'transparent' }}
@@ -2264,6 +2301,7 @@ function CaseDetail({ caseRow, assignments, allAssignments, contractors, qaByAss
                   <span style={{ fontSize: 11, color: '#888' }}>{r.activeCaseCount} open</span>
                 </div>
               ))}
+              </div>
             </div>
           )}
         </div>
